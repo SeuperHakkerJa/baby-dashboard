@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { aggregateScore, evaluateWorldModel } from "./lib/dashboard/decision";
+import { aggregateScore } from "./lib/dashboard/decision";
 import {
+  cameraRgbPercent,
   type DerivedHistoryPoint,
   type DerivedSnapshot,
   computeDerivedSnapshot,
@@ -29,13 +30,6 @@ type FrameState = {
 };
 
 const STREAM_WINDOW = 120;
-
-const ACTUATOR_RANGES = {
-  angleDeg: { min: 0, max: 180, unit: "°" },
-  lightHue: { min: 0, max: 360, unit: "hue" },
-  lightFrequencyHz: { min: 0.2, max: 9, unit: "Hz" },
-  pumpSpeedPct: { min: 0, max: 100, unit: "%" },
-};
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
@@ -86,20 +80,6 @@ function formatValue(value: number, digits = 1) {
   return value.toFixed(digits);
 }
 
-function computeActuatorOutput(sensors: SensorInput, hazard: number) {
-  const angleDeg = clamp(90 + (sensors.lightLux - 520) * 0.045 - (sensors.acousticDb - 34) * 0.58, 6, 174);
-  const lightHue = clamp(215 - (sensors.cameraColorK - 5000) / 24 + hazard * 0.36, 0, 360);
-  const lightFrequencyHz = clamp(0.8 + hazard * 0.052, 0.2, 8.8);
-  const pumpSpeedPct = clamp(34 + (sensors.temperatureC - 24) * 4.2 + hazard * 0.38, 0, 100);
-
-  return {
-    angleDeg: Number(angleDeg.toFixed(1)),
-    lightHue: Number(lightHue.toFixed(1)),
-    lightFrequencyHz: Number(lightFrequencyHz.toFixed(2)),
-    pumpSpeedPct: Number(pumpSpeedPct.toFixed(1)),
-  };
-}
-
 function buildDerivedPoint(label: string, snapshot: DerivedSnapshot[]): DerivedHistoryPoint {
   return {
     label,
@@ -124,8 +104,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   const theme = THEMES[themeName];
-  const frameClass =
-    isClassifiedTheme(themeName) ? "min-h-0 rounded-md border p-4 md:p-5" : "min-h-0 rounded-md border p-4 md:p-5";
+  const frameClass = isClassifiedTheme(themeName) ? "min-h-0 rounded-md border p-4 md:p-5" : "min-h-0 rounded-md border p-4 md:p-5";
 
   return (
     <section
@@ -182,7 +161,6 @@ function SensorCard({
   value,
   unit,
   range,
-  percent,
   themeName,
 }: {
   label: string;
@@ -190,7 +168,6 @@ function SensorCard({
   value: string;
   unit: string;
   range: string;
-  percent: number;
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
@@ -204,7 +181,7 @@ function SensorCard({
       </div>
       <div className="mt-2 text-xl font-semibold">
         {value}
-        {value !== "--" ? (
+        {value !== "--" && unit ? (
           <span className="ml-1 text-sm font-medium" style={{ color: theme.muted }}>
             {unit}
           </span>
@@ -212,12 +189,6 @@ function SensorCard({
       </div>
       <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
         {range}
-      </div>
-      <div className="mt-3 h-1.5 rounded-full bg-white/10">
-        <div
-          className="h-1.5 rounded-full transition-all duration-500"
-          style={{ width: `${Math.max(2, percent)}%`, background: theme.accent }}
-        />
       </div>
     </div>
   );
@@ -228,16 +199,18 @@ function DerivedCard({
   description,
   objective,
   value,
+  threshold,
   themeName,
 }: {
   label: string;
   description: string;
   objective: "maximize" | "minimize";
   value: number;
+  threshold: number;
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
-  const normalized = objective === "maximize" ? value : 100 - value;
+  const aboveThreshold = value > threshold;
   const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
 
   return (
@@ -260,16 +233,12 @@ function DerivedCard({
         </div>
       </div>
       <div className="mt-3 flex items-end justify-between gap-3">
-        <div className="text-2xl font-semibold">{value.toFixed(1)}</div>
-        <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
-          aligned {normalized.toFixed(1)}%
+        <div className="text-2xl font-semibold" style={{ color: aboveThreshold ? "#fb7185" : theme.text }}>
+          {value.toFixed(1)}
         </div>
-      </div>
-      <div className="mt-2 h-1.5 rounded-full bg-white/10">
-        <div
-          className="h-1.5 rounded-full transition-all duration-500"
-          style={{ width: `${Math.max(2, normalized)}%`, background: theme.accentAlt }}
-        />
+        <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+          threshold {threshold.toFixed(1)}
+        </div>
       </div>
     </div>
   );
@@ -430,14 +399,6 @@ export default function Life3Dashboard() {
     [frame.sensors, worldModel]
   );
 
-  const forecast = useMemo(() => evaluateWorldModel(frame.derivedHistory, currentDerived), [currentDerived, frame.derivedHistory]);
-
-  const actuatorHazard = worldModel ? forecast.hazard : 35;
-  const actuators = useMemo(
-    () => computeActuatorOutput(frame.sensors, actuatorHazard),
-    [actuatorHazard, frame.sensors]
-  );
-
   useEffect(() => {
     setHydrated(true);
   }, []);
@@ -549,10 +510,9 @@ export default function Life3Dashboard() {
     () =>
       frame.rawHistory.slice(-STREAM_WINDOW).map((point) => ({
         t: point.label,
-        lightLux: Number(sensorPercent("lightLux", point.sensors.lightLux).toFixed(1)),
-        cameraColorK: Number(sensorPercent("cameraColorK", point.sensors.cameraColorK).toFixed(1)),
+        temperatureF: Number(sensorPercent("temperatureF", point.sensors.temperatureF).toFixed(1)),
+        cameraRgb: cameraRgbPercent(point.sensors),
         acousticDb: Number(sensorPercent("acousticDb", point.sensors.acousticDb).toFixed(1)),
-        temperatureC: Number(sensorPercent("temperatureC", point.sensors.temperatureC).toFixed(1)),
       })),
     [frame.rawHistory]
   );
@@ -577,10 +537,9 @@ export default function Life3Dashboard() {
 
   const rawSeries = useMemo<ChartSeries[]>(
     () => [
-      { key: "lightLux", label: "Light", color: "#00e5ff", strokeWidth: 2.3, dasharray: "0" },
-      { key: "cameraColorK", label: "Camera", color: "#ff4dff", strokeWidth: 2.1, dasharray: "10 6" },
+      { key: "temperatureF", label: "Temp F", color: "#00e5ff", strokeWidth: 2.3, dasharray: "0" },
+      { key: "cameraRgb", label: "Camera RGB", color: "#ff4dff", strokeWidth: 2.1, dasharray: "10 6" },
       { key: "acousticDb", label: "Acoustic", color: "#7dff7a", strokeWidth: 2.1, dasharray: "4 5" },
-      { key: "temperatureC", label: "Temp", color: "#f7f7f7", strokeWidth: 2.2, dasharray: "14 6" },
     ],
     []
   );
@@ -620,31 +579,29 @@ export default function Life3Dashboard() {
       />
 
       <div className="relative z-10 mx-auto grid w-full max-w-[1700px] grid-cols-1 gap-4 xl:h-full xl:grid-cols-12">
-          <div className="grid min-h-0 gap-4 xl:col-span-8 xl:grid-rows-[auto_minmax(0,1fr)]">
-            <div className="grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
+        <div className="grid min-h-0 gap-4 xl:col-span-8 xl:grid-rows-[auto_minmax(0,1fr)]">
+          <div className="grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
             <Panel
               title="Sensor Input"
               subtitle="Measured raw stream (read-only)"
               themeName={themeName}
               right={<IconBadge tag="in" />}
             >
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
                 <SensorCard
-                  label={SENSOR_INPUT_SCHEMA.lightLux.label}
-                  icon={<IconBadge tag="lx" />}
-                  value={formatValue(frame.sensors.lightLux)}
-                  unit={SENSOR_INPUT_SCHEMA.lightLux.unit}
-                  range={`${SENSOR_INPUT_SCHEMA.lightLux.min}-${SENSOR_INPUT_SCHEMA.lightLux.max}`}
-                  percent={sensorPercent("lightLux", frame.sensors.lightLux)}
+                  label={SENSOR_INPUT_SCHEMA.temperatureF.label}
+                  icon={<IconBadge tag="tmp" />}
+                  value={formatValue(frame.sensors.temperatureF)}
+                  unit={SENSOR_INPUT_SCHEMA.temperatureF.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.temperatureF.min}-${SENSOR_INPUT_SCHEMA.temperatureF.max}`}
                   themeName={themeName}
                 />
                 <SensorCard
-                  label={SENSOR_INPUT_SCHEMA.cameraColorK.label}
+                  label="Camera RGB"
                   icon={<IconBadge tag="cam" />}
-                  value={formatValue(frame.sensors.cameraColorK, 0)}
-                  unit={SENSOR_INPUT_SCHEMA.cameraColorK.unit}
-                  range={`${SENSOR_INPUT_SCHEMA.cameraColorK.min}-${SENSOR_INPUT_SCHEMA.cameraColorK.max}`}
-                  percent={sensorPercent("cameraColorK", frame.sensors.cameraColorK)}
+                  value={`${frame.sensors.cameraR}/${frame.sensors.cameraG}/${frame.sensors.cameraB}`}
+                  unit=""
+                  range="0-255 / channel"
                   themeName={themeName}
                 />
                 <SensorCard
@@ -653,45 +610,8 @@ export default function Life3Dashboard() {
                   value={formatValue(frame.sensors.acousticDb)}
                   unit={SENSOR_INPUT_SCHEMA.acousticDb.unit}
                   range={`${SENSOR_INPUT_SCHEMA.acousticDb.min}-${SENSOR_INPUT_SCHEMA.acousticDb.max}`}
-                  percent={sensorPercent("acousticDb", frame.sensors.acousticDb)}
                   themeName={themeName}
                 />
-                <SensorCard
-                  label={SENSOR_INPUT_SCHEMA.temperatureC.label}
-                  icon={<IconBadge tag="tmp" />}
-                  value={formatValue(frame.sensors.temperatureC)}
-                  unit={SENSOR_INPUT_SCHEMA.temperatureC.unit}
-                  range={`${SENSOR_INPUT_SCHEMA.temperatureC.min}-${SENSOR_INPUT_SCHEMA.temperatureC.max}`}
-                  percent={sensorPercent("temperatureC", frame.sensors.temperatureC)}
-                  themeName={themeName}
-                />
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
-                    angle
-                  </div>
-                  <div className="font-semibold whitespace-nowrap">{`${actuators.angleDeg.toFixed(1)} ${ACTUATOR_RANGES.angleDeg.unit}`}</div>
-                </div>
-                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
-                    light color
-                  </div>
-                  <div className="font-semibold whitespace-nowrap">{`${actuators.lightHue.toFixed(1)} ${ACTUATOR_RANGES.lightHue.unit}`}</div>
-                </div>
-                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
-                    light frequency
-                  </div>
-                  <div className="font-semibold whitespace-nowrap">{`${actuators.lightFrequencyHz.toFixed(2)} ${ACTUATOR_RANGES.lightFrequencyHz.unit}`}</div>
-                </div>
-                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
-                    pump speed
-                  </div>
-                  <div className="font-semibold whitespace-nowrap">{`${actuators.pumpSpeedPct.toFixed(1)} ${ACTUATOR_RANGES.pumpSpeedPct.unit}`}</div>
-                </div>
               </div>
             </Panel>
 
@@ -769,7 +689,7 @@ export default function Life3Dashboard() {
               right={<IconBadge tag="ai" />}
             >
               {modelBusy ? (
-                <div className="grid h-full min-h-[240px] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="grid h-full min-h-[36dvh] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
                   <div className="max-w-xl text-center">
                     <div className="text-sm font-semibold uppercase tracking-[0.25em]">generating</div>
                     <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
@@ -778,16 +698,16 @@ export default function Life3Dashboard() {
                   </div>
                 </div>
               ) : !worldModel ? (
-                <div className="grid h-full min-h-[240px] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="grid h-full min-h-[36dvh] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
                   <div className="max-w-xl text-center">
                     <div className="text-sm font-semibold uppercase tracking-[0.25em]">idle</div>
                     <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
-                      Provide a prompt and generate the world model. The board will then load 4-6 derived states and continuously compute them from the raw sensor stream.
+                      Provide a prompt and generate the world model. The board will then load 5-6 derived states (3-4 AI-generated + Surrounding Temperature + Hue) and continuously compute them from the raw sensor stream.
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                <div className="grid h-full min-h-[36dvh] gap-3 overflow-y-auto pr-1 lg:grid-cols-2 xl:grid-cols-3">
                   {currentDerived.map((item) => (
                     <DerivedCard
                       key={item.id}
@@ -795,6 +715,7 @@ export default function Life3Dashboard() {
                       description={item.description}
                       objective={item.objective}
                       value={item.value}
+                      threshold={item.threshold}
                       themeName={themeName}
                     />
                   ))}
@@ -829,6 +750,9 @@ export default function Life3Dashboard() {
                     </div>
                     <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px] leading-relaxed" style={{ borderColor: theme.border }}>
                       {formulaText(definition)}
+                    </div>
+                    <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                      threshold: {definition.threshold.toFixed(1)}
                     </div>
                   </div>
                 ))}
@@ -872,7 +796,7 @@ export default function Life3Dashboard() {
               series={theaterMode === "raw" ? rawSeries : worldModel ? derivedSeries : []}
               themeName={themeName}
             />
-            <div className="h-[32vh] min-h-[220px] w-full xl:h-full">
+            <div className="h-[38vh] min-h-[250px] w-full lg:h-full">
               {!hydrated ? (
                 <div className="grid h-full place-items-center rounded-md border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
                   Loading chart theater...
@@ -894,25 +818,6 @@ export default function Life3Dashboard() {
                   {modelBusy ? "Generating derived stream..." : "Derived stream will appear after model generation."}
                 </div>
               )}
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                <div style={{ color: theme.muted }}>raw points</div>
-                <div className="font-semibold">{frame.rawHistory.length}</div>
-              </div>
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                <div style={{ color: theme.muted }}>derived points</div>
-                <div className="font-semibold">{boardIdle ? "--" : frame.derivedHistory.length}</div>
-              </div>
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                <div style={{ color: theme.muted }}>model source</div>
-                <div className="font-semibold">{modelSource}</div>
-              </div>
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
-                <div style={{ color: theme.muted }}>tick</div>
-                <div className="font-semibold">{frame.tick}</div>
-              </div>
             </div>
           </Panel>
         </div>

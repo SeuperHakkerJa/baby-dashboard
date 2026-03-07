@@ -1,8 +1,9 @@
 export type SensorInput = {
-  lightLux: number;
-  cameraColorK: number;
+  temperatureF: number;
+  cameraR: number;
+  cameraG: number;
+  cameraB: number;
   acousticDb: number;
-  temperatureC: number;
 };
 
 export type ActuatorOutput = {
@@ -120,6 +121,7 @@ export type DerivedDefinition = {
   description: string;
   weights: Record<SensorKey, number>;
   bias: number;
+  threshold: number;
   objective: "maximize" | "minimize";
 };
 

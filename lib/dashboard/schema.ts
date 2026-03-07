@@ -11,21 +11,37 @@ export const SENSOR_INPUT_SCHEMA: Record<
     meaning: string;
   }
 > = {
-  lightLux: {
-    label: "Light",
-    unit: "lux",
-    min: 50,
-    max: 1100,
+  temperatureF: {
+    label: "Temperature",
+    unit: "°F",
+    min: 40,
+    max: 108,
     step: 1,
-    meaning: "Ambient photon density affecting visual sensing and thermal load.",
+    meaning: "Ambient surrounding temperature in Fahrenheit.",
   },
-  cameraColorK: {
-    label: "Camera Color",
-    unit: "K",
-    min: 3000,
-    max: 7600,
-    step: 10,
-    meaning: "Dominant environmental color temperature used for scene interpretation.",
+  cameraR: {
+    label: "Camera R",
+    unit: "R",
+    min: 0,
+    max: 255,
+    step: 1,
+    meaning: "Camera red-channel intensity from the raw RGB feed.",
+  },
+  cameraG: {
+    label: "Camera G",
+    unit: "G",
+    min: 0,
+    max: 255,
+    step: 1,
+    meaning: "Camera green-channel intensity from the raw RGB feed.",
+  },
+  cameraB: {
+    label: "Camera B",
+    unit: "B",
+    min: 0,
+    max: 255,
+    step: 1,
+    meaning: "Camera blue-channel intensity from the raw RGB feed.",
   },
   acousticDb: {
     label: "Acoustic",
@@ -34,14 +50,6 @@ export const SENSOR_INPUT_SCHEMA: Record<
     max: 95,
     step: 0.1,
     meaning: "Noise pressure level indicating disturbance and communication interference.",
-  },
-  temperatureC: {
-    label: "Temperature",
-    unit: "°C",
-    min: 10,
-    max: 40,
-    step: 0.1,
-    meaning: "Thermal condition governing metabolism, cooling load, and embryo stability.",
   },
 };
 
