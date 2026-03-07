@@ -114,6 +114,7 @@ export type ThemeTokens = {
 };
 
 export type SensorKey = keyof SensorInput;
+export type DerivedObjective = "maximize" | "minimize" | "none" | "monitor";
 
 export type DerivedDefinition = {
   id: string;
@@ -122,7 +123,7 @@ export type DerivedDefinition = {
   weights: Record<SensorKey, number>;
   bias: number;
   threshold: number;
-  objective: "maximize" | "minimize";
+  objective: DerivedObjective;
 };
 
 export type WorldModelSpec = {

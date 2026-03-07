@@ -29,13 +29,15 @@ const READINESS_LIMIT = 73;
 const MODEL_CAPABILITY_LIMIT = 60;
 const FORECAST_LIMIT = 8;
 
-function objectiveScore(value: number, objective: "maximize" | "minimize") {
-  return objective === "maximize" ? value : 100 - value;
+function objectiveScore(item: DerivedSnapshot) {
+  if (item.objective === "maximize") return item.value;
+  if (item.objective === "minimize") return 100 - item.value;
+  return 50;
 }
 
 export function aggregateScore(snapshot: DerivedSnapshot[]) {
   if (snapshot.length === 0) return 0;
-  const total = snapshot.reduce((sum, item) => sum + objectiveScore(item.value, item.objective), 0);
+  const total = snapshot.reduce((sum, item) => sum + objectiveScore(item), 0);
   return clamp(total / snapshot.length);
 }
 

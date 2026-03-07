@@ -1,5 +1,5 @@
 import { SENSOR_INPUT_SCHEMA } from "./schema";
-import type { DerivedDefinition, SensorInput, SensorKey, WorldModelSpec } from "./types";
+import type { DerivedDefinition, DerivedObjective, SensorInput, SensorKey, WorldModelSpec } from "./types";
 
 const SENSOR_KEYS: SensorKey[] = ["temperatureF", "cameraR", "cameraG", "cameraB", "acousticDb"];
 const HISTORY_LIMIT = 180;
@@ -24,7 +24,7 @@ export type DerivedSnapshot = {
   description: string;
   value: number;
   threshold: number;
-  objective: "maximize" | "minimize";
+  objective: DerivedObjective;
   formula: string;
 };
 
@@ -123,7 +123,7 @@ function weightedScore(sensors: SensorInput, definition: DerivedDefinition) {
     score += sensorPercent(key, sensors[key]) * definition.weights[key];
   }
 
-  return clamp(score);
+  return Math.max(score, 0);
 }
 
 function fixedDerivedValue(definitionId: string, sensors: SensorInput) {
@@ -157,7 +157,7 @@ export function formulaText(definition: DerivedDefinition) {
   }
 
   const bias = definition.bias >= 0 ? ` + ${definition.bias.toFixed(1)}` : ` - ${Math.abs(definition.bias).toFixed(1)}`;
-  return `clamp(${parts.join(" ")}${bias}, 0, 100)`;
+  return `max(0, ${parts.join(" ")}${bias})`;
 }
 
 export function computeDerivedSnapshot(definitions: DerivedDefinition[], sensors: SensorInput): DerivedSnapshot[] {
@@ -216,8 +216,8 @@ const FIXED_DERIVED_DEFINITIONS: DerivedDefinition[] = [
   {
     id: FIXED_SURROUNDING_TEMP_ID,
     label: "Surrounding Temperature",
-    description: "Direct passthrough of measured surrounding temperature in Fahrenheit.",
-    objective: "maximize",
+    description: "Direct passthrough of measured surrounding temperature in Fahrenheit. Monitor safe band 0F..130F.",
+    objective: "monitor",
     weights: {
       temperatureF: 0,
       cameraR: 0,
@@ -226,13 +226,13 @@ const FIXED_DERIVED_DEFINITIONS: DerivedDefinition[] = [
       acousticDb: 0,
     },
     bias: 0,
-    threshold: 84,
+    threshold: 130,
   },
   {
     id: FIXED_HUE_ID,
     label: "Hue",
     description: "HSV hue computed from camera RGB and normalized to 0..100.",
-    objective: "maximize",
+    objective: "none",
     weights: {
       temperatureF: 0,
       cameraR: 0,
@@ -274,7 +274,7 @@ export function buildLocalWorldModel(prompt: string): WorldModelSpec {
       weights,
       bias: Number((18 + rnd() * 24).toFixed(1)),
       threshold: Number((56 + rnd() * 28).toFixed(1)),
-      objective: rnd() > 0.22 ? "maximize" : "minimize",
+      objective: rnd() > 0.82 ? "none" : rnd() > 0.24 ? "maximize" : "minimize",
     };
   });
 
@@ -327,7 +327,11 @@ export function sanitizeWorldModel(raw: unknown, prompt: string, fallback: World
       const thresholdRaw = Number(def.threshold ?? 70);
       const threshold = Number(clamp(Number.isFinite(thresholdRaw) ? thresholdRaw : 70, 0, 100).toFixed(1));
 
-      const objective = def.objective === "minimize" ? "minimize" : "maximize";
+      const objectiveRaw = typeof def.objective === "string" ? def.objective.toLowerCase() : "";
+      const objective: DerivedObjective =
+        objectiveRaw === "maximize" || objectiveRaw === "minimize" || objectiveRaw === "none" || objectiveRaw === "monitor"
+          ? objectiveRaw
+          : "none";
 
       return {
         id: safeId(String(def.id ?? def.label ?? `state_${index + 1}`), index),

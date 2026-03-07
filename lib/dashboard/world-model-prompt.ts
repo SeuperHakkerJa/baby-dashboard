@@ -23,7 +23,7 @@ Return compact JSON only (no markdown):
       "id": string,
       "label": string,
       "description": string,
-      "objective": "maximize" | "minimize",
+      "objective": "maximize" | "minimize" | "none",
       "weights": {
         "temperatureF": number,
         "acousticDb": number,
@@ -42,6 +42,7 @@ Rules:
 - weights in [-1.5, 1.5]
 - bias in [0, 60]
 - threshold in [0, 100]
+- objective "none" means monitor-only (no directional optimization target)
 - concise labels/descriptions
 - valid JSON only; no extra keys`;
 

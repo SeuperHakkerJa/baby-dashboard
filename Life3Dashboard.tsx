@@ -18,7 +18,7 @@ import {
 } from "./lib/dashboard/pipeline";
 import { SENSOR_INPUT_SCHEMA } from "./lib/dashboard/schema";
 import { THEMES } from "./lib/dashboard/themes";
-import type { SensorInput, ThemeName, WorldModelResponse, WorldModelSpec } from "./lib/dashboard/types";
+import type { DerivedObjective, SensorInput, ThemeName, WorldModelResponse, WorldModelSpec } from "./lib/dashboard/types";
 
 type TheaterMode = "raw" | "derived";
 
@@ -204,13 +204,38 @@ function DerivedCard({
 }: {
   label: string;
   description: string;
-  objective: "maximize" | "minimize";
+  objective: DerivedObjective;
   value: number;
   threshold: number;
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
-  const aboveThreshold = value > threshold;
+  const isThresholdBreached =
+    objective === "maximize"
+      ? value < threshold
+      : objective === "minimize"
+        ? value > threshold
+        : objective === "monitor"
+          ? value <= 0 || value >= threshold
+          : false;
+  const thresholdText =
+    objective === "maximize"
+      ? `min ${threshold.toFixed(1)}`
+      : objective === "minimize"
+        ? `max ${threshold.toFixed(1)}`
+        : objective === "monitor"
+          ? `0 < x < ${threshold.toFixed(1)}f`
+          : "threshold off";
+  const objectiveColor =
+    objective === "maximize" ? "#6ee7b7" : objective === "minimize" ? "#fda4af" : objective === "monitor" ? "#facc15" : "#a3a3a3";
+  const objectiveBg =
+    objective === "maximize"
+      ? "rgba(16,185,129,0.16)"
+      : objective === "minimize"
+        ? "rgba(244,63,94,0.14)"
+        : objective === "monitor"
+          ? "rgba(250,204,21,0.14)"
+          : "rgba(163,163,163,0.15)";
   const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
 
   return (
@@ -225,19 +250,19 @@ function DerivedCard({
         <div
           className="rounded-sm px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
           style={{
-            color: objective === "maximize" ? "#6ee7b7" : "#fda4af",
-            background: objective === "maximize" ? "rgba(16,185,129,0.16)" : "rgba(244,63,94,0.14)",
+            color: objectiveColor,
+            background: objectiveBg,
           }}
         >
           {objective}
         </div>
       </div>
       <div className="mt-3 flex items-end justify-between gap-3">
-        <div className="text-2xl font-semibold" style={{ color: aboveThreshold ? "#fb7185" : theme.text }}>
+        <div className="text-2xl font-semibold" style={{ color: isThresholdBreached ? "#fb7185" : theme.text }}>
           {value.toFixed(1)}
         </div>
         <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
-          threshold {threshold.toFixed(1)}
+          {thresholdText}
         </div>
       </div>
     </div>
@@ -281,8 +306,13 @@ function SimpleLineChart({
     );
   }
 
+  const yMax = Math.max(
+    100,
+    ...data.flatMap((row) => series.map((item) => Math.max(0, safeNumber(row[item.key]))))
+  );
+
   const y = (value: number) => {
-    const normalized = clamp(value, 0, 100) / 100;
+    const normalized = clamp(value, 0, yMax) / yMax;
     return padY + (1 - normalized) * innerH;
   };
 
@@ -301,9 +331,10 @@ function SimpleLineChart({
 
   return (
     <svg className="h-full w-full rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-      {[0, 25, 50, 75, 100].map((level) => (
-        <line key={level} x1={padX} x2={width - padX} y1={y(level)} y2={y(level)} stroke={theme.border} strokeDasharray="4 4" strokeWidth="1" />
-      ))}
+      {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+        const level = yMax * ratio;
+        return <line key={level} x1={padX} x2={width - padX} y1={y(level)} y2={y(level)} stroke={theme.border} strokeDasharray="4 4" strokeWidth="1" />;
+      })}
       {series.map((item) => (
         <g key={item.key}>
           <polyline
@@ -752,7 +783,14 @@ export default function Life3Dashboard() {
                       {formulaText(definition)}
                     </div>
                     <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
-                      threshold: {definition.threshold.toFixed(1)}
+                      threshold:{" "}
+                      {definition.objective === "maximize"
+                        ? `min ${definition.threshold.toFixed(1)}`
+                        : definition.objective === "minimize"
+                          ? `max ${definition.threshold.toFixed(1)}`
+                          : definition.objective === "monitor"
+                            ? `0 < x < ${definition.threshold.toFixed(1)}F`
+                          : "off"}
                     </div>
                   </div>
                 ))}
