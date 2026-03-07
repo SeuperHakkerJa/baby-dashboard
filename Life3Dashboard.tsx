@@ -413,6 +413,7 @@ export default function Life3Dashboard() {
   const [modelSource, setModelSource] = useState<"idle" | "openai" | "local">("idle");
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("raw");
   const [worldModel, setWorldModel] = useState<WorldModelSpec | null>(null);
+  const [debugHeatMode, setDebugHeatMode] = useState(false);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [frame, setFrame] = useState<FrameState>(() => {
@@ -443,7 +444,14 @@ export default function Life3Dashboard() {
     const id = window.setInterval(() => {
       setFrame((prev) => {
         const nextTick = prev.tick + 1;
-        const nextSensors = simulateSensorStep(prev.sensors);
+        let nextSensors = simulateSensorStep(prev.sensors);
+        if (debugHeatMode) {
+          const hotTemp = Math.max(130.4, 136 + Math.sin(nextTick / 3) * 6 + (Math.random() - 0.5) * 2);
+          nextSensors = {
+            ...nextSensors,
+            temperatureF: Number(hotTemp.toFixed(1)),
+          };
+        }
         const label = timeLabel(nextTick);
         const rawHistory = pushRawHistory(prev.rawHistory, { label, sensors: nextSensors });
 
@@ -463,7 +471,7 @@ export default function Life3Dashboard() {
     }, 1000);
 
     return () => window.clearInterval(id);
-  }, [worldModel]);
+  }, [debugHeatMode, worldModel]);
 
   const generateWorldModel = useCallback(async () => {
     const trimmed = prompt.trim();
@@ -616,7 +624,29 @@ export default function Life3Dashboard() {
               title="Sensor Input"
               subtitle="Measured raw stream (read-only)"
               themeName={themeName}
-              right={<IconBadge tag="in" />}
+              right={
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Toggle temperature debug mode"
+                    aria-pressed={debugHeatMode}
+                    title={debugHeatMode ? "debug: thermal override on" : "debug: thermal override off"}
+                    onClick={() => setDebugHeatMode((prev) => !prev)}
+                    className="inline-flex h-3 min-w-[14px] items-center justify-center rounded-sm border px-[1px] text-[6px] font-semibold leading-none uppercase tracking-[0.08em] transition-opacity hover:opacity-100"
+                    style={{
+                      borderColor: debugHeatMode ? "#fb7185" : theme.border,
+                      color: debugHeatMode ? "#fb7185" : theme.muted,
+                      background: debugHeatMode ? "rgba(251,113,133,0.2)" : theme.subpanel,
+                      boxShadow: debugHeatMode ? "0 0 8px rgba(251,113,133,0.2)" : "none",
+                      transform: "scale(0.56)",
+                      transformOrigin: "center",
+                    }}
+                  >
+                    dbg
+                  </button>
+                  <IconBadge tag="in" />
+                </div>
+              }
             >
               <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
                 <SensorCard
