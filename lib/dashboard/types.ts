@@ -146,3 +146,63 @@ export type WorldModelResponse = {
     incompleteReason?: "max_output_tokens" | "content_filter" | null;
   };
 };
+
+export type BabyTraitMode = "balanced" | "heat-shield" | "sprint" | "conserve" | "stealth";
+
+export type BabyTraitConfig = {
+  speed: number;
+  breathingRate: number;
+  bodySize: number;
+  mode: BabyTraitMode;
+};
+
+export type BabyRealizedProjection = {
+  pumpPower: number;
+  microServoAngle: { left: number; right: number };
+  color: { r: number; g: number; b: number };
+  explanation: {
+    pumpPower: string;
+    microServoAngle: string;
+    color: string;
+  };
+};
+
+export type BabyRealizationConfig = {
+  speed: { min: number; max: number; unit: "m/s" };
+  breathingRate: { min: number; max: number; unit: "rpm" };
+  bodySize: { min: number; max: number; unit: "cm" };
+  allowedModes: readonly BabyTraitMode[];
+  fallbackMode: BabyTraitMode;
+};
+
+export type BabySnapshot = {
+  capturedAt: string;
+  tick: number;
+  hotSeconds: number;
+  monitorThresholdF: number;
+  sensors: SensorInput;
+  derived: Array<{
+    id: string;
+    label: string;
+    value: number;
+    objective: DerivedObjective;
+    threshold: number;
+  }>;
+};
+
+export type BabyGenomeResponse = {
+  source: "openai" | "local";
+  snapshot: BabySnapshot;
+  proposed: BabyTraitConfig;
+  realizedTraits: BabyTraitConfig;
+  realizedProjection: BabyRealizedProjection;
+  warning?: string;
+  debug?: {
+    provider: "openai" | "local";
+    modelId: string;
+    keySource?: "env.local" | "none";
+    responseId?: string;
+    latencyMs?: number;
+    incompleteReason?: "max_output_tokens" | "content_filter" | null;
+  };
+};

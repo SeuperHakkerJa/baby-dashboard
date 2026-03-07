@@ -18,7 +18,15 @@ import {
 } from "./lib/dashboard/pipeline";
 import { SENSOR_INPUT_SCHEMA } from "./lib/dashboard/schema";
 import { THEMES } from "./lib/dashboard/themes";
-import type { DerivedObjective, SensorInput, ThemeName, WorldModelResponse, WorldModelSpec } from "./lib/dashboard/types";
+import type {
+  BabyGenomeResponse,
+  BabySnapshot,
+  DerivedObjective,
+  SensorInput,
+  ThemeName,
+  WorldModelResponse,
+  WorldModelSpec,
+} from "./lib/dashboard/types";
 
 type TheaterMode = "raw" | "derived";
 
@@ -30,6 +38,8 @@ type FrameState = {
 };
 
 const STREAM_WINDOW = 120;
+const HEAT_TRIGGER_SECONDS = 5;
+const DEFAULT_MONITOR_TEMP_THRESHOLD_F = 130;
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
@@ -402,6 +412,134 @@ function SeriesLegend({
   );
 }
 
+function BabyGenomeModal({
+  open,
+  loading,
+  error,
+  result,
+  themeName,
+  onClose,
+}: {
+  open: boolean;
+  loading: boolean;
+  error: string | null;
+  result: BabyGenomeResponse | null;
+  themeName: ThemeName;
+  onClose: () => void;
+}) {
+  const theme = THEMES[themeName];
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-4xl rounded-md border p-4 md:p-5"
+        style={{ background: theme.panel, borderColor: theme.border, boxShadow: panelGlow(themeName) }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+              Birth Trigger
+            </div>
+            <h3 className="mt-1 text-lg font-semibold uppercase tracking-[0.08em]">Baby Genome Projection</h3>
+            <div className="mt-1 text-xs" style={{ color: theme.muted }}>
+              Realizability interface file: `lib/dashboard/baby-realization.ts`
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-sm border px-3 py-1.5 text-[11px] uppercase tracking-[0.18em]"
+            style={{ borderColor: theme.border }}
+          >
+            close
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+            Captured snapshot. Generating baby traits and realizable projection...
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: "#fb7185" }}>
+            {error}
+          </div>
+        ) : null}
+
+        {result ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+              <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+                Snapshot
+              </div>
+              <div className="mt-2 text-sm" style={{ color: theme.muted }}>
+                tick {result.snapshot.tick} | hot {result.snapshot.hotSeconds}s | threshold {result.snapshot.monitorThresholdF.toFixed(1)}F
+              </div>
+              <div className="mt-2 text-sm">{`temp ${result.snapshot.sensors.temperatureF.toFixed(1)}F | acoustic ${result.snapshot.sensors.acousticDb.toFixed(1)}dB`}</div>
+              <div className="text-sm">{`camera ${result.snapshot.sensors.cameraR}/${result.snapshot.sensors.cameraG}/${result.snapshot.sensors.cameraB}`}</div>
+              <div className="mt-2 text-[11px]" style={{ color: theme.muted }}>
+                source: {result.source} {result.debug?.responseId ? `| id: ${result.debug.responseId}` : ""}
+              </div>
+            </div>
+
+            <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+              <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+                Traits
+              </div>
+              <div className="mt-2 text-sm">{`speed ${result.realizedTraits.speed.toFixed(2)} m/s`}</div>
+              <div className="text-sm">{`breathing ${result.realizedTraits.breathingRate.toFixed(1)} rpm`}</div>
+              <div className="text-sm">{`body size ${result.realizedTraits.bodySize.toFixed(1)} cm`}</div>
+              <div className="text-sm">{`mode ${result.realizedTraits.mode}`}</div>
+            </div>
+
+            <div className="rounded-md border p-3 md:col-span-2" style={{ borderColor: theme.border, background: theme.subpanel }}>
+              <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+                Realizable Projection
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <div className="rounded-md border p-2" style={{ borderColor: theme.border }}>
+                  <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
+                    Pump Power
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">{result.realizedProjection.pumpPower.toFixed(1)}%</div>
+                  <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                    {result.realizedProjection.explanation.pumpPower}
+                  </div>
+                </div>
+                <div className="rounded-md border p-2" style={{ borderColor: theme.border }}>
+                  <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
+                    Micro Servo
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">
+                    ({result.realizedProjection.microServoAngle.left.toFixed(1)}, {result.realizedProjection.microServoAngle.right.toFixed(1)})
+                  </div>
+                  <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                    {result.realizedProjection.explanation.microServoAngle}
+                  </div>
+                </div>
+                <div className="rounded-md border p-2" style={{ borderColor: theme.border }}>
+                  <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
+                    Color
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">
+                    rgb({result.realizedProjection.color.r},{result.realizedProjection.color.g},{result.realizedProjection.color.b})
+                  </div>
+                  <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                    {result.realizedProjection.explanation.color}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function Life3Dashboard() {
   const [hydrated, setHydrated] = useState(false);
   const themeName: ThemeName = "Obsidian";
@@ -414,6 +552,12 @@ export default function Life3Dashboard() {
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("raw");
   const [worldModel, setWorldModel] = useState<WorldModelSpec | null>(null);
   const [debugHeatMode, setDebugHeatMode] = useState(false);
+  const [babyModalOpen, setBabyModalOpen] = useState(false);
+  const [babyBusy, setBabyBusy] = useState(false);
+  const [babyError, setBabyError] = useState<string | null>(null);
+  const [babyResult, setBabyResult] = useState<BabyGenomeResponse | null>(null);
+  const [hotSeconds, setHotSeconds] = useState(0);
+  const [triggerArmed, setTriggerArmed] = useState(true);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [frame, setFrame] = useState<FrameState>(() => {
@@ -430,6 +574,38 @@ export default function Life3Dashboard() {
     () => (worldModel ? computeDerivedSnapshot(worldModel.definitions, frame.sensors) : []),
     [frame.sensors, worldModel]
   );
+
+  const monitorThresholdF = useMemo(() => {
+    const monitor = worldModel?.definitions.find((item) => item.id === "fixed_surrounding_temperature" && item.objective === "monitor");
+    return monitor?.threshold ?? DEFAULT_MONITOR_TEMP_THRESHOLD_F;
+  }, [worldModel]);
+
+  const generateBabyGenome = useCallback(async (snapshot: BabySnapshot) => {
+    setBabyModalOpen(true);
+    setBabyBusy(true);
+    setBabyError(null);
+    setBabyResult(null);
+
+    try {
+      const response = await fetch("/api/baby-genome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshot }),
+      });
+
+      if (!response.ok) {
+        const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(errorBody?.error ?? `Baby genome request failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as BabyGenomeResponse;
+      setBabyResult(data);
+    } catch (error) {
+      setBabyError(error instanceof Error ? error.message : "Unknown baby genome generation error");
+    } finally {
+      setBabyBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     setHydrated(true);
@@ -472,6 +648,38 @@ export default function Life3Dashboard() {
 
     return () => window.clearInterval(id);
   }, [debugHeatMode, worldModel]);
+
+  useEffect(() => {
+    if (frame.tick === 0) return;
+    if (frame.sensors.temperatureF > monitorThresholdF) {
+      setHotSeconds((prev) => prev + 1);
+      return;
+    }
+    setHotSeconds(0);
+    setTriggerArmed(true);
+  }, [frame.tick, frame.sensors.temperatureF, monitorThresholdF]);
+
+  useEffect(() => {
+    if (!triggerArmed || hotSeconds < HEAT_TRIGGER_SECONDS || babyBusy) return;
+
+    const snapshot: BabySnapshot = {
+      capturedAt: new Date().toISOString(),
+      tick: frame.tick,
+      hotSeconds: HEAT_TRIGGER_SECONDS,
+      monitorThresholdF: Number(monitorThresholdF.toFixed(1)),
+      sensors: { ...frame.sensors },
+      derived: currentDerived.map((item) => ({
+        id: item.id,
+        label: item.label,
+        value: item.value,
+        objective: item.objective,
+        threshold: item.threshold,
+      })),
+    };
+
+    setTriggerArmed(false);
+    void generateBabyGenome(snapshot);
+  }, [babyBusy, currentDerived, frame.sensors, frame.tick, generateBabyGenome, hotSeconds, monitorThresholdF, triggerArmed]);
 
   const generateWorldModel = useCallback(async () => {
     const trimmed = prompt.trim();
@@ -890,6 +1098,15 @@ export default function Life3Dashboard() {
           </Panel>
         </div>
       </div>
+
+      <BabyGenomeModal
+        open={babyModalOpen}
+        loading={babyBusy}
+        error={babyError}
+        result={babyResult}
+        themeName={themeName}
+        onClose={() => setBabyModalOpen(false)}
+      />
     </div>
   );
 }
