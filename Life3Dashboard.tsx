@@ -1,836 +1,961 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { aggregateScore, evaluateWorldModel, synthesizeGenomeCandidate } from "./lib/dashboard/decision";
 import {
-  Activity,
-  AudioLines,
-  Baby,
-  Bone,
-  Bot,
-  Brain,
-  Cpu,
-  Dna,
-  Droplets,
-  Gauge,
-  HeartPulse,
-  Orbit,
-  Rabbit,
-  ScanLine,
-  ScrollText,
-  Shield,
-  Sparkles,
-  Thermometer,
-  Users,
-  Waves,
-  Zap,
-} from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  PolarAngleAxis,
-  PolarGrid,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+  buildLocalWorldModel,
+  type DerivedHistoryPoint,
+  type DerivedSnapshot,
+  computeDerivedSnapshot,
+  formulaText,
+  initialSensors,
+  pushDerivedHistory,
+  pushRawHistory,
+  sensorPercent,
+  simulateSensorStep,
+  timeLabel,
+} from "./lib/dashboard/pipeline";
+import { SENSOR_INPUT_SCHEMA } from "./lib/dashboard/schema";
+import { THEMES } from "./lib/dashboard/themes";
+import type { SensorInput, ThemeName, WorldModelResponse, WorldModelSpec } from "./lib/dashboard/types";
 
-type EnvState = {
-  temperature: number;
-  humidity: number;
-  sound: number;
-  crowd: number;
-  pressure: number;
+type TheaterMode = "raw" | "derived";
+
+type FrameState = {
+  tick: number;
+  sensors: SensorInput;
+  rawHistory: Array<{ label: string; sensors: SensorInput }>;
+  derivedHistory: DerivedHistoryPoint[];
 };
 
-type Genome = {
-  bodySize: number;
-  boneDensity: number;
-  shellFlex: number;
-  sensorDensity: number;
-  energyReserve: number;
-  curiosity: number;
-  caution: number;
-  sociability: number;
-  limbLength: number;
-  signalIntensity: number;
-  boneStructure: "lattice" | "spiral" | "dense" | "segmented" | "hollow";
-  surfaceType: "matte" | "porous" | "adaptive-mesh" | "soft-shell" | "reflective";
-  locomotion: "roller" | "crawler" | "multi-leg" | "hopper" | "glider";
-  temperament: "curious" | "shy" | "cooperative" | "defensive" | "playful";
+const DESKTOP_THEME_OPTIONS: ThemeName[] = ["Cipher", "Zenith", "Quartz", "Tidal", "Lumen"];
+const STREAM_WINDOW = 120;
+
+const ACTUATOR_RANGES = {
+  angleDeg: { min: 0, max: 180, unit: "°" },
+  lightHue: { min: 0, max: 360, unit: "hue" },
+  lightFrequencyHz: { min: 0.2, max: 9, unit: "Hz" },
+  pumpSpeedPct: { min: 0, max: 100, unit: "%" },
 };
 
-type Derived = {
-  stability: number;
-  volatility: number;
-  attentionRisk: number;
-  stealthNeed: number;
-  viability: number;
-  adaptation: number;
-  intelligence: number;
-  resilience: number;
-  agility: number;
-  stealth: number;
-  social: number;
-  biome: string;
-  classLabel: string;
-  recommendations: {
-    size: string;
-    bone: string;
-    motion: string;
-    signal: string;
-  };
-};
-
-type Vitals = {
-  breathingRate: number;
-  pulseRate: number;
-  metabolicLoad: number;
-  wombPressure: number;
-};
-
-type Candidate = {
-  id: string;
-  name: string;
-  score: number;
-  classLabel: string;
-  rationale: string;
-  mutations: string[];
-};
-
-type AIResponse = {
-  summary: string;
-  hiddenBeliefs: Array<{ label: string; value: number }>;
-  candidates: Candidate[];
-  chosenName: string;
-  chosenReason: string;
-};
-
-type TimelinePoint = {
-  t: string;
-  temperature: number;
-  humidity: number;
-  sound: number;
-  stability: number;
-  viability: number;
-  adaptation: number;
-  breathingRate: number;
-  pulseRate: number;
-};
-
-type LogItem = {
-  id: string;
-  time: string;
-  level: "INFO" | "EVENT" | "WARN" | "MODEL";
-  text: string;
-};
-
-const clamp = (v: number, min = 0, max = 100) => Math.max(min, Math.min(max, v));
-const rand = (min: number, max: number) => min + Math.random() * (max - min);
-const pick = <T,>(arr: readonly T[]) => arr[Math.floor(Math.random() * arr.length)];
-const uid = () => Math.random().toString(36).slice(2, 9);
-const stamp = () => new Date().toLocaleTimeString();
-
-const QUAL = {
-  boneStructure: ["lattice", "spiral", "dense", "segmented", "hollow"] as const,
-  surfaceType: ["matte", "porous", "adaptive-mesh", "soft-shell", "reflective"] as const,
-  locomotion: ["roller", "crawler", "multi-leg", "hopper", "glider"] as const,
-  temperament: ["curious", "shy", "cooperative", "defensive", "playful"] as const,
-};
-
-const INITIAL_ENV: EnvState = {
-  temperature: 24.5,
-  humidity: 56,
-  sound: 38,
-  crowd: 42,
-  pressure: 61,
-};
-
-const INITIAL_GENOME: Genome = {
-  bodySize: 58,
-  boneDensity: 62,
-  shellFlex: 67,
-  sensorDensity: 73,
-  energyReserve: 58,
-  curiosity: 70,
-  caution: 47,
-  sociability: 54,
-  limbLength: 45,
-  signalIntensity: 37,
-  boneStructure: "lattice",
-  surfaceType: "adaptive-mesh",
-  locomotion: "roller",
-  temperament: "curious",
-};
-
-function scoreEnvironment(env: EnvState) {
-  const temperatureScore = clamp(100 - Math.abs(env.temperature - 23.5) * 7.1);
-  const humidityScore = clamp(100 - Math.abs(env.humidity - 54) * 2.6);
-  const soundScore = clamp(100 - Math.abs(env.sound - 28) * 1.45);
-  const crowdScore = clamp(100 - Math.abs(env.crowd - 35) * 1.25);
-  const pressureScore = clamp(100 - Math.abs(env.pressure - 60) * 2.0);
-
-  const stability = clamp(
-    temperatureScore * 0.25 +
-      humidityScore * 0.2 +
-      soundScore * 0.25 +
-      crowdScore * 0.14 +
-      pressureScore * 0.16
-  );
-
-  const volatility = clamp(
-    (100 - temperatureScore) * 0.2 +
-      (100 - humidityScore) * 0.16 +
-      (100 - soundScore) * 0.31 +
-      (100 - crowdScore) * 0.17 +
-      (100 - pressureScore) * 0.16
-  );
-
-  const biome = stability > 82 ? "supportive" : stability > 68 ? "adaptive" : stability > 50 ? "fragile" : "hostile";
-  const attentionRisk = clamp(env.sound * 0.5 + env.crowd * 0.5);
-  const stealthNeed = clamp(attentionRisk * 0.72 + volatility * 0.28);
-
-  return { stability, volatility, attentionRisk, stealthNeed, biome };
+function clamp(value: number, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function scoreGenomeFit(env: EnvState, genome: Genome) {
-  const bodyTarget = env.temperature > 27 ? 38 : env.temperature < 20 ? 72 : 56;
-  const shellTarget = env.humidity > 60 ? 76 : env.humidity < 40 ? 44 : 60;
-  const cautionTarget = env.sound > 56 || env.crowd > 58 ? 78 : 46;
-  const curiosityTarget = env.sound < 38 && env.crowd < 50 ? 74 : 49;
-  const signalTarget = env.sound > 56 || env.crowd > 62 ? 18 : env.crowd < 30 ? 62 : 35;
-  const densityTarget = env.pressure > 70 ? 76 : 58;
+function panelGlow(themeName: ThemeName) {
+  const map: Record<ThemeName, string> = {
+    Cipher: "0 30px 90px rgba(15, 23, 42, 0.45)",
+    Zenith: "0 28px 80px rgba(12, 65, 95, 0.34)",
+    Quartz: "0 28px 80px rgba(76, 35, 92, 0.34)",
+    Tidal: "0 28px 80px rgba(21, 80, 76, 0.34)",
+    Lumen: "0 28px 80px rgba(92, 67, 20, 0.34)",
+  };
 
-  const bodyFit = clamp(100 - Math.abs(genome.bodySize - bodyTarget) * 1.3);
-  const shellFit = clamp(100 - Math.abs(genome.shellFlex - shellTarget) * 1.4);
-  const cautionFit = clamp(100 - Math.abs(genome.caution - cautionTarget) * 1.15);
-  const curiosityFit = clamp(100 - Math.abs(genome.curiosity - curiosityTarget) * 1.05);
-  const signalFit = clamp(100 - Math.abs(genome.signalIntensity - signalTarget) * 1.55);
-  const densityFit = clamp(100 - Math.abs(genome.boneDensity - densityTarget) * 1.1);
-  const energyFit = clamp(100 - Math.abs(genome.energyReserve - (env.temperature < 20 ? 74 : 56)) * 1.05);
+  return map[themeName];
+}
 
-  const viability = clamp(
-    bodyFit * 0.16 +
-      shellFit * 0.16 +
-      cautionFit * 0.16 +
-      curiosityFit * 0.14 +
-      signalFit * 0.16 +
-      densityFit * 0.1 +
-      energyFit * 0.12
-  );
+function classifiedScan(themeName: ThemeName) {
+  if (themeName !== "Cipher") return "transparent";
 
-  const adaptation = clamp(
-    genome.sensorDensity * 0.17 +
-      genome.shellFlex * 0.11 +
-      genome.energyReserve * 0.1 +
-      cautionFit * 0.18 +
-      curiosityFit * 0.16 +
-      bodyFit * 0.14 +
-      shellFit * 0.14
-  );
+  return "repeating-linear-gradient(0deg, rgba(148,163,184,0.06) 0px, rgba(148,163,184,0.06) 1px, transparent 1px, transparent 4px)";
+}
+
+function classifiedGrid(themeName: ThemeName) {
+  if (themeName !== "Cipher") return "transparent";
+
+  return "linear-gradient(rgba(148,163,184,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.05) 1px, transparent 1px)";
+}
+
+function formatValue(value: number, digits = 1) {
+  return value.toFixed(digits);
+}
+
+function computeActuatorOutput(sensors: SensorInput, hazard: number) {
+  const angleDeg = clamp(90 + (sensors.lightLux - 520) * 0.045 - (sensors.acousticDb - 34) * 0.58, 6, 174);
+  const lightHue = clamp(215 - (sensors.cameraColorK - 5000) / 24 + hazard * 0.36, 0, 360);
+  const lightFrequencyHz = clamp(0.8 + hazard * 0.052, 0.2, 8.8);
+  const pumpSpeedPct = clamp(34 + (sensors.temperatureC - 24) * 4.2 + hazard * 0.38, 0, 100);
 
   return {
-    viability,
-    adaptation,
-    recommendations: {
-      size: env.temperature > 27 ? "compact torso" : env.temperature < 20 ? "thermal bulk" : "balanced torso",
-      bone: env.humidity > 64 ? "spiral bones" : env.sound > 58 ? "dense bones" : "lattice bones",
-      motion: env.crowd > 60 ? "crawler gait" : env.sound < 35 ? "roller gait" : "multi-leg gait",
-      signal: env.sound > 56 || env.crowd > 62 ? "quiet pulse" : "ambient glow",
-    },
+    angleDeg: Number(angleDeg.toFixed(1)),
+    lightHue: Number(lightHue.toFixed(1)),
+    lightFrequencyHz: Number(lightFrequencyHz.toFixed(2)),
+    pumpSpeedPct: Number(pumpSpeedPct.toFixed(1)),
   };
 }
 
-function derive(env: EnvState, genome: Genome): Derived {
-  const e = scoreEnvironment(env);
-  const g = scoreGenomeFit(env, genome);
-
-  const intelligence = clamp(genome.sensorDensity * 0.3 + genome.curiosity * 0.22 + e.stability * 0.22 + g.adaptation * 0.26);
-  const resilience = clamp(genome.energyReserve * 0.24 + genome.boneDensity * 0.2 + genome.shellFlex * 0.18 + g.viability * 0.19 + g.adaptation * 0.19);
-  const agility = clamp((100 - genome.bodySize) * 0.18 + genome.limbLength * 0.25 + genome.caution * 0.14 + genome.curiosity * 0.12 + (genome.locomotion === "hopper" ? 16 : genome.locomotion === "roller" ? 12 : genome.locomotion === "multi-leg" ? 10 : 6));
-  const stealth = clamp((100 - genome.signalIntensity) * 0.34 + genome.caution * 0.18 + (genome.surfaceType === "matte" ? 16 : genome.surfaceType === "adaptive-mesh" ? 14 : 7) + e.stealthNeed * 0.24 + g.viability * 0.08);
-  const social = clamp(genome.sociability * 0.48 + genome.signalIntensity * 0.16 + (genome.temperament === "cooperative" ? 18 : genome.temperament === "playful" ? 12 : 6) + env.crowd * 0.12 + (100 - env.sound) * 0.08);
-
-  const classLabel =
-    intelligence > 74 && agility > 60
-      ? "Adaptive Scout"
-      : resilience > 74 && stealth > 58
-      ? "Fortress Forager"
-      : social > 72
-      ? "Choral Companion"
-      : stealth > 76
-      ? "Ghost Worker"
-      : "Hybrid Drifter";
-
+function buildDerivedPoint(label: string, snapshot: DerivedSnapshot[]): DerivedHistoryPoint {
   return {
-    stability: e.stability,
-    volatility: e.volatility,
-    attentionRisk: e.attentionRisk,
-    stealthNeed: e.stealthNeed,
-    viability: g.viability,
-    adaptation: g.adaptation,
-    intelligence,
-    resilience,
-    agility,
-    stealth,
-    social,
-    biome: e.biome,
-    classLabel,
-    recommendations: g.recommendations,
+    label,
+    values: Object.fromEntries(snapshot.map((item) => [item.id, item.value])),
+    aggregate: Number(aggregateScore(snapshot).toFixed(1)),
   };
 }
 
-function deriveVitals(env: EnvState, d: Derived): Vitals {
-  return {
-    breathingRate: clamp(10 + env.sound * 0.22 + d.volatility * 0.08, 8, 36),
-    pulseRate: clamp(62 + env.crowd * 0.32 + d.attentionRisk * 0.2, 58, 128),
-    metabolicLoad: clamp(d.adaptation * 0.46 + (100 - d.stability) * 0.28 + env.temperature * 0.7, 12, 96),
-    wombPressure: clamp(env.pressure * 0.65 + d.viability * 0.15 + env.humidity * 0.2, 10, 100),
-  };
-}
+function WorldModelModal({
+  open,
+  onClose,
+  json,
+  themeName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  json: Record<string, unknown> | null;
+  themeName: ThemeName;
+}) {
+  const theme = THEMES[themeName];
 
-function fakeSensorStep(prev: EnvState): EnvState {
-  const next = {
-    temperature: clamp(prev.temperature + rand(-0.45, 0.45), 16, 34),
-    humidity: clamp(prev.humidity + rand(-1.8, 1.8), 20, 88),
-    sound: clamp(prev.sound + rand(-3.2, 3.2), 10, 95),
-    crowd: clamp(prev.crowd + rand(-3.1, 3.1), 0, 100),
-    pressure: clamp(prev.pressure + rand(-2.0, 2.0), 20, 95),
-  };
+  if (!open || !json) return null;
 
-  if (Math.random() > 0.94) next.sound = clamp(next.sound + rand(8, 18));
-  if (Math.random() > 0.95) next.crowd = clamp(next.crowd + rand(10, 20));
-  if (Math.random() > 0.96) next.humidity = clamp(next.humidity + rand(6, 12));
-
-  return next;
-}
-
-function mutateGenome(base: Genome, env: EnvState): Genome {
-  return {
-    ...base,
-    bodySize: clamp(base.bodySize + rand(-8, 8) + (env.temperature > 27 ? -5 : env.temperature < 20 ? 6 : 0)),
-    boneDensity: clamp(base.boneDensity + rand(-10, 10) + (env.pressure > 70 ? 6 : 0)),
-    shellFlex: clamp(base.shellFlex + rand(-10, 10) + (env.humidity > 60 ? 6 : env.humidity < 40 ? -6 : 0)),
-    sensorDensity: clamp(base.sensorDensity + rand(-10, 10)),
-    energyReserve: clamp(base.energyReserve + rand(-12, 12) + (env.temperature < 20 ? 5 : 0)),
-    curiosity: clamp(base.curiosity + rand(-12, 12) + (env.sound < 40 ? 4 : -3)),
-    caution: clamp(base.caution + rand(-12, 12) + (env.sound > 56 || env.crowd > 60 ? 9 : -2)),
-    sociability: clamp(base.sociability + rand(-12, 12) + (env.crowd > 55 ? 5 : -2)),
-    limbLength: clamp(base.limbLength + rand(-12, 12)),
-    signalIntensity: clamp(base.signalIntensity + rand(-15, 15) + (env.sound > 56 || env.crowd > 62 ? -10 : 5)),
-    boneStructure: Math.random() > 0.65 ? pick(QUAL.boneStructure) : base.boneStructure,
-    surfaceType: Math.random() > 0.65 ? pick(QUAL.surfaceType) : base.surfaceType,
-    locomotion: Math.random() > 0.65 ? pick(QUAL.locomotion) : base.locomotion,
-    temperament: Math.random() > 0.65 ? pick(QUAL.temperament) : base.temperament,
-  };
-}
-
-function fakeAI(env: EnvState, genome: Genome): AIResponse {
-  const d = derive(env, genome);
-  const candidates: Candidate[] = Array.from({ length: 3 }).map((_, index) => {
-    const g = mutateGenome(genome, env);
-    const dg = derive(env, g);
-    return {
-      id: uid(),
-      name: ["Embryo Alpha", "Embryo Beta", "Embryo Gamma"][index],
-      score: clamp(dg.viability * 0.56 + dg.intelligence * 0.14 + dg.resilience * 0.12 + dg.stealth * 0.09 + dg.social * 0.09),
-      classLabel: dg.classLabel,
-      rationale: `${dg.classLabel} tuned for a ${dg.biome} environment with ${Math.round(dg.viability)}% viability.`,
-      mutations: [dg.recommendations.size, dg.recommendations.bone, dg.recommendations.motion, dg.recommendations.signal],
-    };
-  }).sort((a, b) => b.score - a.score);
-
-  return {
-    summary: `Mother model infers a ${d.biome} habitat with stability ${Math.round(d.stability)}% and volatility ${Math.round(d.volatility)}%. Attention risk is ${Math.round(d.attentionRisk)}%, so the planner biases toward ${d.stealthNeed > 62 ? "stealth, caution, and low-signature signaling" : "balanced exploration and moderate social signaling"}. Current embryo viability is ${Math.round(d.viability)}%. Recommended package: ${d.recommendations.size}, ${d.recommendations.bone}, ${d.recommendations.motion}, ${d.recommendations.signal}.`,
-    hiddenBeliefs: [
-      { label: "attention_risk", value: d.attentionRisk },
-      { label: "stealth_need", value: d.stealthNeed },
-      { label: "offspring_viability", value: d.viability },
-      { label: "adaptation_pressure", value: d.adaptation },
-      { label: "social_fragility", value: clamp(env.crowd * 0.5 + env.sound * 0.35 + (100 - d.stability) * 0.15) },
-    ],
-    candidates,
-    chosenName: candidates[0].name,
-    chosenReason: `${candidates[0].name} wins because it best balances viability, embodiment, and environmental fit under current attention pressure.`,
-  };
-}
-
-async function requestAI(env: EnvState, genome: Genome): Promise<AIResponse> {
-  const response = await fetch("/api/life3-reason", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ env, genome }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`AI route failed with ${response.status}`);
-  }
-
-  return response.json();
-}
-
-function Panel({ title, subtitle, icon, right, children }: { title: string; subtitle?: string; icon?: React.ReactNode; right?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.05] shadow-[0_20px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
-        <div className="flex items-start gap-3">
-          {icon ? <div className="mt-0.5 text-cyan-300">{icon}</div> : null}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-4xl rounded-[1.7rem] border p-4 md:p-5"
+        style={{
+          background: theme.panel,
+          borderColor: theme.border,
+          color: theme.text,
+          boxShadow: panelGlow(themeName),
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold uppercase tracking-[0.24em] text-white/90">{title}</div>
-            {subtitle ? <div className="mt-1 text-xs text-white/50">{subtitle}</div> : null}
+            <div className="text-[11px] uppercase tracking-[0.24em]" style={{ color: theme.muted }}>
+              Birth Window Output
+            </div>
+            <h3 className="mt-1 text-xl font-semibold">AI-Derived Genome Candidate</h3>
           </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border px-3 py-1.5 text-xs uppercase tracking-[0.2em]"
+            style={{ borderColor: theme.border }}
+          >
+            close
+          </button>
+        </div>
+        <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+          <pre className="max-h-[60vh] overflow-auto text-xs leading-6">{JSON.stringify(json, null, 2)}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Panel({
+  title,
+  subtitle,
+  right,
+  themeName,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+  themeName: ThemeName;
+  children: React.ReactNode;
+}) {
+  const theme = THEMES[themeName];
+  const frameClass =
+    themeName === "Cipher" ? "min-h-0 rounded-xl border p-4 md:p-5" : "min-h-0 rounded-[1.5rem] border p-4 md:p-5";
+
+  return (
+    <section
+      className={frameClass}
+      style={{
+        background: theme.panel,
+        borderColor: theme.border,
+        boxShadow: panelGlow(themeName),
+        outline: themeName === "Cipher" ? "1px solid rgba(148,163,184,0.14)" : "none",
+        outlineOffset: themeName === "Cipher" ? "-6px" : "0px",
+      }}
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.23em]">{title}</h2>
+          {subtitle ? (
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: theme.muted }}>
+              {subtitle}
+            </p>
+          ) : null}
         </div>
         {right}
       </div>
-      <div className="p-5">{children}</div>
+      <div className="min-h-0">{children}</div>
+    </section>
+  );
+}
+
+function IconBadge({ tag }: { tag: string }) {
+  return (
+    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-md border px-1 text-[9px] font-semibold uppercase tracking-[0.08em] opacity-85">
+      {tag}
+    </span>
+  );
+}
+
+function SensorCard({
+  label,
+  icon,
+  value,
+  unit,
+  range,
+  percent,
+  themeName,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  value: string;
+  unit: string;
+  range: string;
+  percent: number;
+  themeName: ThemeName;
+}) {
+  const theme = THEMES[themeName];
+  const shellClass = themeName === "Cipher" ? "rounded-xl border p-3" : "rounded-2xl border p-3";
+
+  return (
+    <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+        {icon}
+        {label}
+      </div>
+      <div className="mt-2 text-xl font-semibold">
+        {value}
+        {value !== "--" ? (
+          <span className="ml-1 text-sm font-medium" style={{ color: theme.muted }}>
+            {unit}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+        {range}
+      </div>
+      <div className="mt-3 h-1.5 rounded-full bg-white/10">
+        <div
+          className="h-1.5 rounded-full transition-all duration-500"
+          style={{ width: `${Math.max(2, percent)}%`, background: theme.accent }}
+        />
+      </div>
     </div>
   );
 }
 
-function MetricTile({ title, value, suffix, icon, tone = "cyan" }: { title: string; value: number; suffix?: string; icon: React.ReactNode; tone?: "cyan" | "violet" | "emerald" | "amber" | "rose" }) {
-  const tones = {
-    cyan: "from-cyan-500/20 to-sky-500/5 border-cyan-400/20 text-cyan-200",
-    violet: "from-violet-500/20 to-fuchsia-500/5 border-violet-400/20 text-violet-200",
-    emerald: "from-emerald-500/20 to-teal-500/5 border-emerald-400/20 text-emerald-200",
-    amber: "from-amber-500/20 to-yellow-500/5 border-amber-400/20 text-amber-200",
-    rose: "from-rose-500/20 to-pink-500/5 border-rose-400/20 text-rose-200",
-  }[tone];
+function DerivedCard({
+  label,
+  description,
+  objective,
+  value,
+  themeName,
+}: {
+  label: string;
+  description: string;
+  objective: "maximize" | "minimize";
+  value: number;
+  themeName: ThemeName;
+}) {
+  const theme = THEMES[themeName];
+  const normalized = objective === "maximize" ? value : 100 - value;
+  const shellClass = themeName === "Cipher" ? "rounded-xl border p-3" : "rounded-2xl border p-3";
 
   return (
-    <div className={`rounded-2xl border bg-gradient-to-br ${tones} p-4`}>
-      <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.24em] text-white/60">
-        <span>{title}</span>
-        <span>{icon}</span>
+    <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{label}</div>
+          <div className="mt-1 text-xs leading-relaxed" style={{ color: theme.muted }}>
+            {description}
+          </div>
+        </div>
+        <div
+          className="rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
+          style={{
+            color: objective === "maximize" ? "#6ee7b7" : "#fda4af",
+            background: objective === "maximize" ? "rgba(16,185,129,0.16)" : "rgba(244,63,94,0.14)",
+          }}
+        >
+          {objective}
+        </div>
       </div>
-      <div className="text-3xl font-semibold text-white">
-        {value.toFixed(value >= 100 ? 0 : 1)}
-        {suffix ? <span className="ml-1 text-base text-white/50">{suffix}</span> : null}
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div className="text-2xl font-semibold">{value.toFixed(1)}</div>
+        <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+          aligned {normalized.toFixed(1)}%
+        </div>
+      </div>
+      <div className="mt-2 h-1.5 rounded-full bg-white/10">
+        <div
+          className="h-1.5 rounded-full transition-all duration-500"
+          style={{ width: `${Math.max(2, normalized)}%`, background: theme.accentAlt }}
+        />
       </div>
     </div>
   );
 }
 
-function SliderRow({ label, value, min = 0, max = 100, step = 1, onChange, accent = "cyan" }: { label: string; value: number; min?: number; max?: number; step?: number; onChange: (n: number) => void; accent?: "cyan" | "violet" | "emerald" | "amber" | "rose" }) {
-  const accentClass = {
-    cyan: "accent-cyan-400",
-    violet: "accent-violet-400",
-    emerald: "accent-emerald-400",
-    amber: "accent-amber-400",
-    rose: "accent-rose-400",
-  }[accent];
+type ChartSeries = {
+  key: string;
+  color: string;
+  strokeWidth?: number;
+};
 
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs uppercase tracking-[0.22em] text-white/60">
-        <span>{label}</span>
-        <span className="text-white/85">{value.toFixed(1)}</span>
-      </div>
-      <input className={`w-full ${accentClass}`} type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-    </div>
-  );
+function safeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function SelectRow<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: readonly T[]; onChange: (v: T) => void }) {
-  return (
-    <label className="space-y-2 text-sm">
-      <div className="text-xs uppercase tracking-[0.22em] text-white/60">{label}</div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-white outline-none transition focus:border-cyan-400/50"
-      >
-        {options.map((option) => (
-          <option key={option} value={option} className="bg-slate-900">
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
+function SimpleLineChart({
+  data,
+  series,
+  themeName,
+}: {
+  data: Array<Record<string, string | number>>;
+  series: ChartSeries[];
+  themeName: ThemeName;
+}) {
+  const theme = THEMES[themeName];
+  const width = 1000;
+  const height = 320;
+  const padX = 30;
+  const padY = 18;
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
 
-function ProgressBar({ label, value }: { label: string; value: number }) {
+  if (data.length < 2) {
+    return (
+      <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+        Waiting for stream points...
+      </div>
+    );
+  }
+
+  const y = (value: number) => {
+    const normalized = clamp(value, 0, 100) / 100;
+    return padY + (1 - normalized) * innerH;
+  };
+
+  const x = (index: number) => {
+    const den = Math.max(data.length - 1, 1);
+    return padX + (index / den) * innerW;
+  };
+
+  const pointsFor = (key: string) =>
+    data
+      .map((row, index) => `${x(index)},${y(safeNumber(row[key]))}`)
+      .join(" ");
+
+  const leftLabel = String(data[0]?.t ?? "");
+  const rightLabel = String(data[data.length - 1]?.t ?? "");
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs uppercase tracking-[0.22em] text-white/60">
-        <span>{label}</span>
-        <span className="text-white/85">{Math.round(value)}%</span>
-      </div>
-      <div className="h-2 rounded-full bg-white/10">
-        <div className="h-2 rounded-full bg-gradient-to-r from-cyan-400 via-violet-400 to-pink-400" style={{ width: `${Math.max(4, value)}%` }} />
-      </div>
-    </div>
+    <svg className="h-full w-full rounded-2xl border" style={{ borderColor: theme.border, background: theme.subpanel }} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+      {[0, 25, 50, 75, 100].map((level) => (
+        <line key={level} x1={padX} x2={width - padX} y1={y(level)} y2={y(level)} stroke={theme.border} strokeDasharray="4 4" strokeWidth="1" />
+      ))}
+      {series.map((item) => (
+        <polyline
+          key={item.key}
+          points={pointsFor(item.key)}
+          fill="none"
+          stroke={item.color}
+          strokeWidth={item.strokeWidth ?? 2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ))}
+      <text x={padX} y={height - 6} fill={theme.muted} fontSize="11">
+        {leftLabel}
+      </text>
+      <text x={width - padX} y={height - 6} fill={theme.muted} fontSize="11" textAnchor="end">
+        {rightLabel}
+      </text>
+    </svg>
   );
 }
 
 export default function Life3Dashboard() {
-  const [env, setEnv] = useState<EnvState>(INITIAL_ENV);
-  const [genome, setGenome] = useState<Genome>(INITIAL_GENOME);
-  const [streaming, setStreaming] = useState(true);
-  const [autoReason, setAutoReason] = useState(true);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [logs, setLogs] = useState<LogItem[]>([]);
-  const [ai, setAi] = useState<AIResponse | null>(null);
-  const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
-  const [birthTick, setBirthTick] = useState(0);
-  const aiTimer = useRef<number | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [themeName, setThemeName] = useState<ThemeName>("Cipher");
+  const [prompt, setPrompt] = useState("");
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelWarning, setModelWarning] = useState<string | null>(null);
+  const [modelTrace, setModelTrace] = useState<string | null>(null);
+  const [modelSource, setModelSource] = useState<"idle" | "openai" | "local">("idle");
+  const [theaterMode, setTheaterMode] = useState<TheaterMode>("raw");
+  const [worldModel, setWorldModel] = useState<WorldModelSpec | null>(null);
+  const [showGenomeModal, setShowGenomeModal] = useState(false);
+  const derivedPanelRef = useRef<HTMLDivElement | null>(null);
 
-  const derived = useMemo(() => derive(env, genome), [env, genome]);
-  const vitals = useMemo(() => deriveVitals(env, derived), [env, derived]);
+  const [frame, setFrame] = useState<FrameState>(() => {
+    const sensors = initialSensors();
+    return {
+      tick: 0,
+      sensors,
+      rawHistory: [{ label: timeLabel(0), sensors }],
+      derivedHistory: [],
+    };
+  });
 
-  const phenotypeRadar = useMemo(
-    () => [
-      { trait: "Intelligence", value: derived.intelligence },
-      { trait: "Resilience", value: derived.resilience },
-      { trait: "Agility", value: derived.agility },
-      { trait: "Stealth", value: derived.stealth },
-      { trait: "Social", value: derived.social },
-      { trait: "Viability", value: derived.viability },
-    ],
-    [derived]
+  const currentDerived = useMemo(
+    () => (worldModel ? computeDerivedSnapshot(worldModel.definitions, frame.sensors) : []),
+    [frame.sensors, worldModel]
   );
 
-  const hiddenBeliefsChart = useMemo(
-    () => (ai?.hiddenBeliefs ?? []).map((item) => ({ name: item.label, value: item.value })),
-    [ai]
+  const forecast = useMemo(() => evaluateWorldModel(frame.derivedHistory, currentDerived), [currentDerived, frame.derivedHistory]);
+
+  const actuatorHazard = worldModel ? forecast.hazard : 35;
+  const actuators = useMemo(
+    () => computeActuatorOutput(frame.sensors, actuatorHazard),
+    [actuatorHazard, frame.sensors]
   );
 
-  function pushLog(level: LogItem["level"], text: string) {
-    setLogs((prev) => [{ id: uid(), time: stamp(), level, text }, ...prev].slice(0, 30));
-  }
+  const candidateGenome = useMemo(() => {
+    if (!worldModel || !forecast.birthWindowOpen) return null;
+    return synthesizeGenomeCandidate(worldModel, frame.sensors, currentDerived, forecast);
+  }, [currentDerived, forecast, frame.sensors, worldModel]);
 
-  async function runReasoning(source: "auto" | "manual" | "birth") {
-    setAiBusy(true);
-    setAiError(null);
-    try {
-      const result = await requestAI(env, genome);
-      setAi(result);
-      pushLog("MODEL", `AI world model updated via backend route (${source}). Selected ${result.chosenName}.`);
-    } catch (error) {
-      const fallback = fakeAI(env, genome);
-      setAi(fallback);
-      const message = error instanceof Error ? error.message : "Unknown AI error";
-      setAiError(message);
-      pushLog("WARN", `Backend reasoning unavailable, showing local fallback. ${message}`);
-    } finally {
-      setAiBusy(false);
+  const birthRef = useRef(false);
+  useEffect(() => {
+    if (forecast.birthWindowOpen && !birthRef.current) {
+      setShowGenomeModal(true);
     }
-  }
-
-  function createBaby() {
-    setBirthTick((x) => x + 1);
-    pushLog("EVENT", `Embryo compilation triggered. Phenotype class=${derived.classLabel}, viability=${Math.round(derived.viability)}%.`);
-    setGenome((g) => ({
-      ...g,
-      bodySize: clamp(g.bodySize + (derived.recommendations.size.includes("compact") ? -5 : derived.recommendations.size.includes("thermal") ? 6 : 0)),
-      boneStructure: derived.recommendations.bone.includes("spiral") ? "spiral" : derived.recommendations.bone.includes("dense") ? "dense" : "lattice",
-      locomotion: derived.recommendations.motion.includes("crawler") ? "crawler" : derived.recommendations.motion.includes("roller") ? "roller" : "multi-leg",
-      signalIntensity: clamp(g.signalIntensity + (derived.recommendations.signal.includes("quiet") ? -8 : 6)),
-      caution: clamp(g.caution + (derived.stealthNeed > 60 ? 6 : -2)),
-    }));
-    void runReasoning("birth");
-  }
+    birthRef.current = forecast.birthWindowOpen;
+  }, [forecast.birthWindowOpen]);
 
   useEffect(() => {
-    pushLog("INFO", "Dashboard initialized. Fake sensor bus online; AI route expected at /api/life3-reason.");
-    void runReasoning("manual");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!streaming) return;
-    const id = window.setInterval(() => {
-      setEnv((prev) => fakeSensorStep(prev));
-    }, 900);
-    return () => window.clearInterval(id);
-  }, [streaming]);
+    if (!worldModel) return;
+    derivedPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [worldModel?.generatedAt]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      const point: TimelinePoint = {
-        t: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        temperature: Number(env.temperature.toFixed(1)),
-        humidity: Number(env.humidity.toFixed(1)),
-        sound: Number(env.sound.toFixed(1)),
-        stability: Number(derived.stability.toFixed(1)),
-        viability: Number(derived.viability.toFixed(1)),
-        adaptation: Number(derived.adaptation.toFixed(1)),
-        breathingRate: Number(vitals.breathingRate.toFixed(1)),
-        pulseRate: Number(vitals.pulseRate.toFixed(1)),
-      };
-      setTimeline((prev) => [...prev.slice(-19), point]);
+      setFrame((prev) => {
+        const nextTick = prev.tick + 1;
+        const nextSensors = simulateSensorStep(prev.sensors);
+        const label = timeLabel(nextTick);
+        const rawHistory = pushRawHistory(prev.rawHistory, { label, sensors: nextSensors });
+
+        let derivedHistory = prev.derivedHistory;
+        if (worldModel) {
+          const snapshot = computeDerivedSnapshot(worldModel.definitions, nextSensors);
+          derivedHistory = pushDerivedHistory(prev.derivedHistory, buildDerivedPoint(label, snapshot));
+        }
+
+        return {
+          tick: nextTick,
+          sensors: nextSensors,
+          rawHistory,
+          derivedHistory,
+        };
+      });
     }, 1000);
-    return () => window.clearInterval(id);
-  }, [env, derived, vitals]);
 
-  useEffect(() => {
-    if (!autoReason) return;
-    if (aiTimer.current) window.clearTimeout(aiTimer.current);
-    aiTimer.current = window.setTimeout(() => {
-      void runReasoning("auto");
-    }, 1200);
-    return () => {
-      if (aiTimer.current) window.clearTimeout(aiTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [env, genome, autoReason]);
+    return () => window.clearInterval(id);
+  }, [worldModel]);
+
+  const generateWorldModel = useCallback(async () => {
+    const trimmed = prompt.trim();
+
+    if (!trimmed) {
+      setModelError("Enter a prompt before generating derived states.");
+      setModelWarning(null);
+      return;
+    }
+
+    setModelBusy(true);
+    setModelError(null);
+    setModelWarning("Generating preview now. Replacing with OpenAI response when ready...");
+    setModelTrace(null);
+    setShowGenomeModal(false);
+    setTheaterMode("derived");
+
+    const previewModel = buildLocalWorldModel(trimmed);
+    setModelSource("local");
+    setWorldModel(previewModel);
+    setFrame((prev) => {
+      const derivedHistory = prev.rawHistory.map((point) => {
+        const snapshot = computeDerivedSnapshot(previewModel.definitions, point.sensors);
+        return buildDerivedPoint(point.label, snapshot);
+      });
+      return {
+        ...prev,
+        derivedHistory,
+      };
+    });
+
+    try {
+      const response = await fetch("/api/world-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: trimmed }),
+      });
+
+      if (!response.ok) {
+        const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(errorBody?.error ?? `World model request failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as WorldModelResponse;
+      setModelSource(data.source);
+      setModelWarning(data.warning ?? null);
+      if (data.debug) {
+        const bits = [
+          data.debug.provider,
+          data.debug.modelId,
+          data.debug.responseId ? `id:${data.debug.responseId}` : "",
+          data.debug.latencyMs != null ? `${data.debug.latencyMs}ms` : "",
+        ].filter(Boolean);
+        setModelTrace(bits.join(" | "));
+      } else {
+        setModelTrace(null);
+      }
+      setWorldModel(data.model);
+
+      setFrame((prev) => {
+        const derivedHistory = prev.rawHistory.map((point) => {
+          const snapshot = computeDerivedSnapshot(data.model.definitions, point.sensors);
+          return buildDerivedPoint(point.label, snapshot);
+        });
+
+        return {
+          ...prev,
+          derivedHistory,
+        };
+      });
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "Unknown world-model generation error");
+    } finally {
+      setModelBusy(false);
+    }
+  }, [prompt]);
+
+  const clearWorldModel = useCallback(() => {
+    setWorldModel(null);
+    setModelSource("idle");
+    setModelWarning(null);
+    setModelTrace(null);
+    setModelError(null);
+    setTheaterMode("raw");
+    setShowGenomeModal(false);
+    setFrame((prev) => ({ ...prev, derivedHistory: [] }));
+  }, []);
+
+  const rawChartData = useMemo(
+    () =>
+      frame.rawHistory.slice(-STREAM_WINDOW).map((point) => ({
+        t: point.label,
+        lightLux: Number(sensorPercent("lightLux", point.sensors.lightLux).toFixed(1)),
+        cameraColorK: Number(sensorPercent("cameraColorK", point.sensors.cameraColorK).toFixed(1)),
+        acousticDb: Number(sensorPercent("acousticDb", point.sensors.acousticDb).toFixed(1)),
+        temperatureC: Number(sensorPercent("temperatureC", point.sensors.temperatureC).toFixed(1)),
+      })),
+    [frame.rawHistory]
+  );
+
+  const leadingDerived = useMemo(() => worldModel?.definitions.slice(0, 3) ?? [], [worldModel]);
+
+  const derivedChartData = useMemo(
+    () =>
+      frame.derivedHistory.slice(-STREAM_WINDOW).map((point) => {
+        const row: Record<string, string | number> = {
+          t: point.label,
+          aggregate: point.aggregate,
+        };
+
+        for (const item of leadingDerived) {
+          row[item.id] = Number((point.values[item.id] ?? 0).toFixed(1));
+        }
+
+        return row;
+      }),
+    [frame.derivedHistory, leadingDerived]
+  );
+
+  const theme = THEMES[themeName];
+  const boardIdle = !worldModel;
+  const derivedStatusText = boardIdle ? "derived idle" : `${worldModel.definitions.length} derived states`;
 
   return (
-    <div className="min-h-screen bg-[#050816] text-white">
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-cyan-500/15 blur-3xl" />
-        <div className="absolute right-0 top-24 h-[28rem] w-[28rem] rounded-full bg-violet-500/15 blur-3xl" />
-        <div className="absolute bottom-0 left-1/3 h-[30rem] w-[30rem] rounded-full bg-fuchsia-500/10 blur-3xl" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_45%)]" />
-      </div>
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto p-3 md:p-4" style={{ background: theme.canvas, color: theme.text }}>
+      <div className="pointer-events-none fixed inset-0" style={{ backgroundImage: theme.mesh, opacity: 0.78 }} />
+      <div
+        className="pointer-events-none fixed inset-0"
+        style={{ backgroundImage: classifiedGrid(themeName), backgroundSize: "34px 34px", opacity: 0.45 }}
+      />
+      <div className="pointer-events-none fixed inset-0" style={{ backgroundImage: classifiedScan(themeName), opacity: 0.36, mixBlendMode: "screen" }} />
 
-      <div className="relative mx-auto max-w-[1680px] px-6 py-6">
-        <motion.div
-          key={birthTick}
-          initial={{ opacity: 0.7, scale: 0.995 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)] backdrop-blur-xl"
-        >
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.32em] text-cyan-300">
-                <ScanLine className="h-4 w-4" />
-                Life 3.0 Reproductive Intelligence Interface
+      {themeName === "Cipher" ? (
+        <div className="pointer-events-none fixed left-3 top-3 z-20 rounded-md border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]" style={{ borderColor: theme.border, background: "rgba(8,13,16,0.78)", color: theme.muted }}>
+          clearance omega | classified systems theater
+        </div>
+      ) : null}
+
+      <div className="relative z-10 mx-auto grid w-full max-w-[1700px] grid-cols-1 gap-4 xl:min-h-[calc(100dvh-2rem)] xl:grid-cols-12">
+        <div className="grid min-h-0 gap-4 xl:col-span-8 xl:grid-rows-[auto_auto_1fr]">
+          <Panel
+            title="Mother Interface"
+            subtitle="Monitor-only board: measured sensors, derived world model, and live theater history"
+            themeName={themeName}
+            right={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {DESKTOP_THEME_OPTIONS.map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => setThemeName(name)}
+                    className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]"
+                    style={{
+                      borderColor: theme.border,
+                      color: themeName === name ? theme.text : theme.muted,
+                      background: themeName === name ? theme.subpanel : "transparent",
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
               </div>
-              <h1 className="text-3xl font-semibold tracking-tight md:text-5xl">Mother Robot World Model + Embryo Compiler</h1>
-              <p className="mt-2 max-w-4xl text-sm text-white/60 md:text-base">
-                Fake sensor stream, real dashboard, real AI reasoning path. The embodiment output is not wired yet — this board is the live decision theater.
-              </p>
+            }
+          >
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                  <IconBadge tag="rs" /> raw stream
+                </div>
+                <div className="mt-2 text-2xl font-semibold">live</div>
+              </div>
+              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                  <IconBadge tag="ds" /> derived model
+                </div>
+                <div className="mt-2 text-2xl font-semibold">{derivedStatusText}</div>
+              </div>
+              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                  <IconBadge tag="th" /> theater mode
+                </div>
+                <div className="mt-2 text-2xl font-semibold">{theaterMode}</div>
+              </div>
+              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                  <IconBadge tag="pt" /> points
+                </div>
+                <div className="mt-2 text-2xl font-semibold">{frame.rawHistory.length}</div>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[620px]">
-              <button onClick={() => setStreaming((v) => !v)} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10">
-                {streaming ? "Pause stream" : "Resume stream"}
-              </button>
-              <button onClick={() => setAutoReason((v) => !v)} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10">
-                {autoReason ? "Auto AI: on" : "Auto AI: off"}
-              </button>
-              <button onClick={() => void runReasoning("manual")} className="rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-3 text-sm font-medium text-cyan-200 hover:bg-cyan-500/15">
-                Run real AI now
-              </button>
-              <button onClick={createBaby} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 text-sm font-medium text-violet-200 hover:bg-violet-500/15">
-                Compile baby
-              </button>
-            </div>
-          </div>
+          </Panel>
 
-          <div className="mt-5 flex flex-wrap gap-3 text-xs uppercase tracking-[0.22em] text-white/65">
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2">stream {streaming ? "active" : "paused"}</div>
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2">AI {aiBusy ? "thinking" : aiError ? "fallback active" : "backend live"}</div>
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2">class {derived.classLabel}</div>
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2">biome {derived.biome}</div>
-            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2">viability {Math.round(derived.viability)}%</div>
-          </div>
-        </motion.div>
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <div className="space-y-6 xl:col-span-8">
+          <div className="grid min-h-0 gap-4 lg:grid-cols-2">
             <Panel
-              title="Environmental Input Lattice"
-              subtitle="Fake live data generator for temperature, sound, humidity, crowding, and chamber pressure"
-              icon={<Orbit className="h-5 w-5" />}
-              right={<div className="text-xs uppercase tracking-[0.22em] text-white/50">stream step 900ms</div>}
+              title="Sensor Input"
+              subtitle="Measured raw stream (read-only)"
+              themeName={themeName}
+              right={<IconBadge tag="in" />}
             >
-              <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                  <MetricTile title="Temperature" value={env.temperature} suffix="°C" icon={<Thermometer className="h-4 w-4" />} />
-                  <MetricTile title="Humidity" value={env.humidity} suffix="%" icon={<Droplets className="h-4 w-4" />} tone="emerald" />
-                  <MetricTile title="Sound" value={env.sound} suffix="dB" icon={<AudioLines className="h-4 w-4" />} tone="amber" />
-                  <MetricTile title="Crowd" value={env.crowd} suffix="%" icon={<Users className="h-4 w-4" />} tone="rose" />
-                  <MetricTile title="Pressure" value={env.pressure} suffix="kPa" icon={<Gauge className="h-4 w-4" />} tone="violet" />
-                  <MetricTile title="Stability" value={derived.stability} suffix="%" icon={<Shield className="h-4 w-4" />} tone="cyan" />
-                </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <SensorCard
+                  label={SENSOR_INPUT_SCHEMA.lightLux.label}
+                  icon={<IconBadge tag="lx" />}
+                  value={formatValue(frame.sensors.lightLux)}
+                  unit={SENSOR_INPUT_SCHEMA.lightLux.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.lightLux.min}-${SENSOR_INPUT_SCHEMA.lightLux.max}`}
+                  percent={sensorPercent("lightLux", frame.sensors.lightLux)}
+                  themeName={themeName}
+                />
+                <SensorCard
+                  label={SENSOR_INPUT_SCHEMA.cameraColorK.label}
+                  icon={<IconBadge tag="cam" />}
+                  value={formatValue(frame.sensors.cameraColorK, 0)}
+                  unit={SENSOR_INPUT_SCHEMA.cameraColorK.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.cameraColorK.min}-${SENSOR_INPUT_SCHEMA.cameraColorK.max}`}
+                  percent={sensorPercent("cameraColorK", frame.sensors.cameraColorK)}
+                  themeName={themeName}
+                />
+                <SensorCard
+                  label={SENSOR_INPUT_SCHEMA.acousticDb.label}
+                  icon={<IconBadge tag="db" />}
+                  value={formatValue(frame.sensors.acousticDb)}
+                  unit={SENSOR_INPUT_SCHEMA.acousticDb.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.acousticDb.min}-${SENSOR_INPUT_SCHEMA.acousticDb.max}`}
+                  percent={sensorPercent("acousticDb", frame.sensors.acousticDb)}
+                  themeName={themeName}
+                />
+                <SensorCard
+                  label={SENSOR_INPUT_SCHEMA.temperatureC.label}
+                  icon={<IconBadge tag="tmp" />}
+                  value={formatValue(frame.sensors.temperatureC)}
+                  unit={SENSOR_INPUT_SCHEMA.temperatureC.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.temperatureC.min}-${SENSOR_INPUT_SCHEMA.temperatureC.max}`}
+                  percent={sensorPercent("temperatureC", frame.sensors.temperatureC)}
+                  themeName={themeName}
+                />
+              </div>
 
-                <div className="space-y-4 rounded-3xl border border-white/10 bg-black/20 p-4">
-                  <SliderRow label="Temperature" value={env.temperature} min={16} max={34} step={0.1} onChange={(v) => setEnv((e) => ({ ...e, temperature: v }))} />
-                  <SliderRow label="Humidity" value={env.humidity} onChange={(v) => setEnv((e) => ({ ...e, humidity: v }))} accent="emerald" />
-                  <SliderRow label="Sound" value={env.sound} onChange={(v) => setEnv((e) => ({ ...e, sound: v }))} accent="amber" />
-                  <SliderRow label="Crowd" value={env.crowd} onChange={(v) => setEnv((e) => ({ ...e, crowd: v }))} accent="rose" />
-                  <SliderRow label="Pressure" value={env.pressure} onChange={(v) => setEnv((e) => ({ ...e, pressure: v }))} accent="violet" />
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div style={{ color: theme.muted }}>angle</div>
+                  <div className="font-semibold">{`${actuators.angleDeg.toFixed(1)} ${ACTUATOR_RANGES.angleDeg.unit}`}</div>
+                </div>
+                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div style={{ color: theme.muted }}>light color</div>
+                  <div className="font-semibold">{`${actuators.lightHue.toFixed(1)} ${ACTUATOR_RANGES.lightHue.unit}`}</div>
+                </div>
+                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div style={{ color: theme.muted }}>light frequency</div>
+                  <div className="font-semibold">{`${actuators.lightFrequencyHz.toFixed(2)} ${ACTUATOR_RANGES.lightFrequencyHz.unit}`}</div>
+                </div>
+                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div style={{ color: theme.muted }}>pump speed</div>
+                  <div className="font-semibold">{`${actuators.pumpSpeedPct.toFixed(1)} ${ACTUATOR_RANGES.pumpSpeedPct.unit}`}</div>
                 </div>
               </div>
             </Panel>
 
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Panel title="Synthetic Vitals" subtitle="Embodied theater: the mother system looks alive before hardware is wired" icon={<HeartPulse className="h-5 w-5" />}>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <MetricTile title="Breathing" value={vitals.breathingRate} suffix="rpm" icon={<Waves className="h-4 w-4" />} tone="cyan" />
-                  <MetricTile title="Pulse" value={vitals.pulseRate} suffix="bpm" icon={<HeartPulse className="h-4 w-4" />} tone="rose" />
-                  <MetricTile title="Metabolic load" value={vitals.metabolicLoad} suffix="%" icon={<Zap className="h-4 w-4" />} tone="amber" />
-                  <MetricTile title="Womb pressure" value={vitals.wombPressure} suffix="%" icon={<Gauge className="h-4 w-4" />} tone="violet" />
-                </div>
-              </Panel>
+            <Panel
+              title="World Model Prompt"
+              subtitle="AI is called only when you press Generate. No prompt means derived board stays idle."
+              themeName={themeName}
+              right={<IconBadge tag="pr" />}
+            >
+              <textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                className="h-32 w-full resize-none rounded-2xl border px-3 py-2 text-sm outline-none"
+                style={{
+                  borderColor: theme.border,
+                  background: theme.subpanel,
+                  color: theme.text,
+                }}
+                placeholder="Describe what the model should optimize and monitor..."
+              />
 
-              <Panel title="World Model State" subtitle="Derived latent state that the AI reasons over" icon={<Brain className="h-5 w-5" />}>
-                <div className="space-y-4">
-                  <ProgressBar label="Environmental stability" value={derived.stability} />
-                  <ProgressBar label="Volatility" value={derived.volatility} />
-                  <ProgressBar label="Attention risk" value={derived.attentionRisk} />
-                  <ProgressBar label="Stealth need" value={derived.stealthNeed} />
-                  <ProgressBar label="Embryo viability" value={derived.viability} />
-                  <ProgressBar label="Adaptation pressure" value={derived.adaptation} />
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => void generateWorldModel()}
+                  disabled={modelBusy}
+                  className="rounded-xl border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-55"
+                  style={{ borderColor: theme.border, background: theme.subpanel }}
+                >
+                  {modelBusy ? "generating..." : "generate world model"}
+                </button>
+                <button
+                  onClick={clearWorldModel}
+                  disabled={!worldModel}
+                  className="rounded-xl border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-45"
+                  style={{ borderColor: theme.border }}
+                >
+                  clear
+                </button>
+                <div className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border }}>
+                  model {modelSource}
                 </div>
-              </Panel>
-            </div>
-
-            <Panel title="Live Monitoring" subtitle="This is the hacky real-time theater board" icon={<Activity className="h-5 w-5" />}>
-              <div className="grid gap-6 lg:grid-cols-2">
-                <div className="h-80 rounded-3xl border border-white/10 bg-black/20 p-3">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={timeline}>
-                      <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-                      <XAxis dataKey="t" hide />
-                      <YAxis domain={[0, 100]} stroke="rgba(255,255,255,0.28)" />
-                      <Tooltip contentStyle={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16 }} />
-                      <Legend />
-                      <Line type="monotone" dataKey="stability" stroke="#67e8f9" dot={false} strokeWidth={2} />
-                      <Line type="monotone" dataKey="viability" stroke="#c084fc" dot={false} strokeWidth={2} />
-                      <Line type="monotone" dataKey="adaptation" stroke="#34d399" dot={false} strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                <div className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border }}>
+                  {derivedStatusText}
                 </div>
-                <div className="h-80 rounded-3xl border border-white/10 bg-black/20 p-3">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={timeline}>
-                      <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-                      <XAxis dataKey="t" hide />
-                      <YAxis stroke="rgba(255,255,255,0.28)" />
-                      <Tooltip contentStyle={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16 }} />
-                      <Area type="monotone" dataKey="temperature" stroke="#22d3ee" fill="#22d3ee33" strokeWidth={2} />
-                      <Area type="monotone" dataKey="humidity" stroke="#34d399" fill="#34d39922" strokeWidth={2} />
-                      <Area type="monotone" dataKey="sound" stroke="#f59e0b" fill="#f59e0b22" strokeWidth={2} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
+                {candidateGenome ? (
+                  <button
+                    onClick={() => setShowGenomeModal(true)}
+                    className="rounded-xl border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em]"
+                    style={{ borderColor: theme.border, background: theme.subpanel }}
+                  >
+                    view genome json
+                  </button>
+                ) : null}
               </div>
-            </Panel>
 
-            <Panel title="Embryo Genome Compiler" subtitle="Quantitative and qualitative gene mixing board" icon={<Dna className="h-5 w-5" />}>
-              <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-                <div className="space-y-4 rounded-3xl border border-white/10 bg-black/20 p-4">
-                  <SliderRow label="Body size" value={genome.bodySize} onChange={(v) => setGenome((g) => ({ ...g, bodySize: v }))} />
-                  <SliderRow label="Bone density" value={genome.boneDensity} onChange={(v) => setGenome((g) => ({ ...g, boneDensity: v }))} accent="violet" />
-                  <SliderRow label="Shell flex" value={genome.shellFlex} onChange={(v) => setGenome((g) => ({ ...g, shellFlex: v }))} accent="emerald" />
-                  <SliderRow label="Sensor density" value={genome.sensorDensity} onChange={(v) => setGenome((g) => ({ ...g, sensorDensity: v }))} accent="cyan" />
-                  <SliderRow label="Energy reserve" value={genome.energyReserve} onChange={(v) => setGenome((g) => ({ ...g, energyReserve: v }))} accent="amber" />
-                  <SliderRow label="Curiosity" value={genome.curiosity} onChange={(v) => setGenome((g) => ({ ...g, curiosity: v }))} accent="cyan" />
-                  <SliderRow label="Caution" value={genome.caution} onChange={(v) => setGenome((g) => ({ ...g, caution: v }))} accent="rose" />
-                  <SliderRow label="Sociability" value={genome.sociability} onChange={(v) => setGenome((g) => ({ ...g, sociability: v }))} accent="violet" />
-                  <SliderRow label="Limb length" value={genome.limbLength} onChange={(v) => setGenome((g) => ({ ...g, limbLength: v }))} accent="emerald" />
-                  <SliderRow label="Signal intensity" value={genome.signalIntensity} onChange={(v) => setGenome((g) => ({ ...g, signalIntensity: v }))} accent="amber" />
+              {modelWarning ? (
+                <div className="mt-2 text-xs" style={{ color: "#facc15" }}>
+                  {modelWarning}
                 </div>
-                <div className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <SelectRow label="Bone structure" value={genome.boneStructure} options={QUAL.boneStructure} onChange={(v) => setGenome((g) => ({ ...g, boneStructure: v }))} />
-                    <SelectRow label="Surface type" value={genome.surfaceType} options={QUAL.surfaceType} onChange={(v) => setGenome((g) => ({ ...g, surfaceType: v }))} />
-                    <SelectRow label="Locomotion" value={genome.locomotion} options={QUAL.locomotion} onChange={(v) => setGenome((g) => ({ ...g, locomotion: v }))} />
-                    <SelectRow label="Temperament" value={genome.temperament} options={QUAL.temperament} onChange={(v) => setGenome((g) => ({ ...g, temperament: v }))} />
-                  </div>
-
-                  <div className="h-72 rounded-3xl border border-white/10 bg-black/20 p-3">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <RadarChart data={phenotypeRadar}>
-                        <PolarGrid stroke="rgba(255,255,255,0.12)" />
-                        <PolarAngleAxis dataKey="trait" tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 12 }} />
-                        <Radar dataKey="value" stroke="#67e8f9" fill="#67e8f933" fillOpacity={0.8} />
-                      </RadarChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <MetricTile title="Species class" value={derived.viability} suffix="% fit" icon={<Baby className="h-4 w-4" />} tone="violet" />
-                    <MetricTile title="Locomotion bias" value={derived.agility} suffix="%" icon={<Rabbit className="h-4 w-4" />} tone="emerald" />
-                  </div>
+              ) : null}
+              {modelTrace ? (
+                <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                  {modelTrace}
                 </div>
-              </div>
+              ) : null}
+              {modelError ? (
+                <div className="mt-2 text-xs" style={{ color: "#fb7185" }}>
+                  {modelError}
+                </div>
+              ) : null}
             </Panel>
           </div>
 
-          <div className="space-y-6 xl:col-span-4">
-            <Panel title="AI Reflection" subtitle="This path is supposed to be real. Hook it to your backend OpenAI route." icon={<Bot className="h-5 w-5" />} right={<div className="text-xs uppercase tracking-[0.22em] text-white/50">route /api/life3-reason</div>}>
-              <div className="rounded-3xl border border-cyan-400/20 bg-cyan-500/5 p-4 text-sm leading-7 text-cyan-50">
-                {aiBusy ? "Thinking…" : ai?.summary ?? "No AI reasoning yet."}
-              </div>
-              {aiError ? <div className="mt-3 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">Backend unavailable: {aiError}. Showing local fallback.</div> : null}
-              {ai ? <div className="mt-4 text-sm text-white/70">Chosen embryo: <span className="font-semibold text-white">{ai.chosenName}</span> — {ai.chosenReason}</div> : null}
-            </Panel>
-
-            <Panel title="Hidden Beliefs" subtitle="Latent variables inferred by the model" icon={<Cpu className="h-5 w-5" />}>
-              <div className="h-72 rounded-3xl border border-white/10 bg-black/20 p-3">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={hiddenBeliefsChart} layout="vertical" margin={{ left: 20, right: 10 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-                    <XAxis type="number" domain={[0, 100]} stroke="rgba(255,255,255,0.28)" />
-                    <YAxis type="category" dataKey="name" width={120} stroke="rgba(255,255,255,0.45)" />
-                    <Tooltip contentStyle={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16 }} />
-                    <Bar dataKey="value" fill="#c084fc" radius={[6, 6, 6, 6]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
-
-            <Panel title="Embryo Candidates" subtitle="What the AI thinks the mother could build next" icon={<Sparkles className="h-5 w-5" />}>
-              <div className="space-y-4">
-                {(ai?.candidates ?? fakeAI(env, genome).candidates).map((candidate, index) => (
-                  <motion.div key={candidate.id} whileHover={{ y: -2 }} className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold uppercase tracking-[0.22em] text-white/85">{candidate.name}</div>
-                        <div className="mt-1 text-xs text-white/45">{candidate.classLabel}</div>
-                      </div>
-                      <div className={`rounded-full px-3 py-1 text-xs font-semibold ${index === 0 ? "bg-cyan-500/15 text-cyan-200" : "bg-white/10 text-white/70"}`}>
-                        {Math.round(candidate.score)}
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm leading-6 text-white/70">{candidate.rationale}</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {candidate.mutations.map((mutation) => (
-                        <span key={mutation} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/65">
-                          {mutation}
-                        </span>
-                      ))}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </Panel>
-
-            <Panel title="Compiler Recommendation" subtitle="Environment-aware body and behavior package" icon={<Bone className="h-5 w-5" />}>
-              <div className="space-y-4 rounded-3xl border border-white/10 bg-black/20 p-4 text-sm text-white/75">
-                <div className="flex items-center justify-between"><span>Body geometry</span><span className="font-semibold text-white">{derived.recommendations.size}</span></div>
-                <div className="flex items-center justify-between"><span>Bone system</span><span className="font-semibold text-white">{derived.recommendations.bone}</span></div>
-                <div className="flex items-center justify-between"><span>Locomotion</span><span className="font-semibold text-white">{derived.recommendations.motion}</span></div>
-                <div className="flex items-center justify-between"><span>Signaling</span><span className="font-semibold text-white">{derived.recommendations.signal}</span></div>
-              </div>
-            </Panel>
-
-            <Panel title="Event / Model Log" subtitle="Make the system feel procedural and alive" icon={<ScrollText className="h-5 w-5" />}>
-              <div className="max-h-[34rem] space-y-3 overflow-auto pr-1">
-                {logs.map((log) => (
-                  <div key={log.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6">
-                    <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-[0.22em] text-white/45">
-                      <span>{log.level}</span>
-                      <span>{log.time}</span>
-                    </div>
-                    <div className="text-white/75">{log.text}</div>
+          <div ref={derivedPanelRef}>
+            <Panel
+              title="Derived World State"
+              subtitle="Computed from AI-returned weighted formulas over live sensor values"
+              themeName={themeName}
+              right={<IconBadge tag="ai" />}
+            >
+              {!worldModel ? (
+                <div className="grid h-full min-h-[240px] place-items-center rounded-2xl border" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                  <div className="max-w-xl text-center">
+                    <div className="text-sm font-semibold uppercase tracking-[0.25em]">idle</div>
+                    <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
+                      Provide a prompt and generate the world model. The board will then load 4-6 derived states and continuously compute them from the raw sensor stream.
+                    </p>
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                  {currentDerived.map((item) => (
+                    <DerivedCard
+                      key={item.id}
+                      label={item.label}
+                      description={item.description}
+                      objective={item.objective}
+                      value={item.value}
+                      themeName={themeName}
+                    />
+                  ))}
+                </div>
+              )}
             </Panel>
           </div>
         </div>
+
+        <div className="grid min-h-0 gap-4 xl:col-span-4 xl:grid-rows-[auto_1fr]">
+          <Panel
+            title="Formula Register"
+            subtitle="Weighted equations returned by the model and used locally each tick"
+            themeName={themeName}
+            right={<IconBadge tag="fx" />}
+          >
+            {!worldModel ? (
+              <div className="rounded-2xl border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                Waiting for generated model formulas.
+              </div>
+            ) : (
+              <div className="max-h-[30vh] space-y-2 overflow-auto pr-1">
+                {worldModel.definitions.map((definition) => (
+                  <div key={definition.id} className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold">{definition.label}</div>
+                      <div className="text-[10px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+                        {definition.objective}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs" style={{ color: theme.muted }}>
+                      {definition.description}
+                    </div>
+                    <div className="mt-2 rounded-xl border px-2 py-1.5 text-[11px] leading-relaxed" style={{ borderColor: theme.border }}>
+                      {formulaText(definition)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          <Panel
+            title="History Theater"
+            subtitle="Switch between normalized raw telemetry and derived world-state streams"
+            themeName={themeName}
+            right={
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setTheaterMode("raw")}
+                  className="rounded-lg border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
+                  style={{
+                    borderColor: theme.border,
+                    background: theaterMode === "raw" ? theme.subpanel : "transparent",
+                    color: theaterMode === "raw" ? theme.text : theme.muted,
+                  }}
+                >
+                  raw
+                </button>
+                <button
+                  onClick={() => setTheaterMode("derived")}
+                  className="rounded-lg border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
+                  style={{
+                    borderColor: theme.border,
+                    background: theaterMode === "derived" ? theme.subpanel : "transparent",
+                    color: theaterMode === "derived" ? theme.text : theme.muted,
+                  }}
+                  disabled={!worldModel}
+                >
+                  derived
+                </button>
+              </div>
+            }
+          >
+            <div className="h-[38vh] min-h-[250px] w-full lg:h-full">
+              {!hydrated ? (
+                <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                  Loading chart theater...
+                </div>
+              ) : theaterMode === "raw" ? (
+                <SimpleLineChart
+                  data={rawChartData}
+                  themeName={themeName}
+                  series={[
+                    { key: "lightLux", color: theme.chartA, strokeWidth: 2 },
+                    { key: "cameraColorK", color: theme.chartB, strokeWidth: 2 },
+                    { key: "acousticDb", color: theme.chartC, strokeWidth: 2 },
+                    { key: "temperatureC", color: theme.accentAlt, strokeWidth: 2 },
+                  ]}
+                />
+              ) : worldModel ? (
+                <SimpleLineChart
+                  data={derivedChartData}
+                  themeName={themeName}
+                  series={[
+                    { key: "aggregate", color: theme.accent, strokeWidth: 2.2 },
+                    ...leadingDerived.map((item, index) => ({
+                      key: item.id,
+                      color: index === 0 ? theme.chartA : index === 1 ? theme.chartB : theme.chartC,
+                      strokeWidth: 1.8,
+                    })),
+                  ]}
+                />
+              ) : (
+                <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                  Derived stream will appear after model generation.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                <div style={{ color: theme.muted }}>raw points</div>
+                <div className="font-semibold">{frame.rawHistory.length}</div>
+              </div>
+              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                <div style={{ color: theme.muted }}>derived points</div>
+                <div className="font-semibold">{boardIdle ? "--" : frame.derivedHistory.length}</div>
+              </div>
+              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                <div style={{ color: theme.muted }}>model source</div>
+                <div className="font-semibold">{modelSource}</div>
+              </div>
+              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+                <div style={{ color: theme.muted }}>tick</div>
+                <div className="font-semibold">{frame.tick}</div>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <WorldModelModal
+        open={showGenomeModal}
+        onClose={() => setShowGenomeModal(false)}
+        json={candidateGenome as Record<string, unknown> | null}
+        themeName={themeName}
+      />
+
+      <div className="mt-2 px-1 text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+        {boardIdle
+          ? themeName === "Cipher"
+            ? "raw stream live | derived idle"
+            : "raw stream running | derived idle"
+          : themeName === "Cipher"
+          ? "raw + derived streams live | classified monitor bus"
+          : "raw + derived streams running | monitor-only interface"}
       </div>
     </div>
   );

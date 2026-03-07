@@ -1,0 +1,32 @@
+{
+  "name": "baby-dashboard",
+  "version": "1.0.0",
+  "description": "Files in this pack: - Life3Dashboard.tsx - app/api/life3-reason/route.ts",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "tw:build": "tailwindcss -i ./app/tailwind.input.css -o ./app/tailwind.generated.css --cwd ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "next": "^16.1.6",
+    "openai": "^6.27.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.1",
+    "@tailwindcss/postcss": "^4.2.1",
+    "@types/node": "^25.3.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.9.3"
+  }
+}

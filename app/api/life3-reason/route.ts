@@ -1,49 +1,106 @@
 import OpenAI from "openai";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { readStrictOpenAIKeyFromEnvLocal } from "../../../lib/dashboard/env";
+import { localPlanner } from "../../../lib/dashboard/model";
+import { buildPlannerPrompt } from "../../../lib/dashboard/prompts";
+import type { PlannerPayload, PlannerResponse } from "../../../lib/dashboard/types";
+
+const PLANNER_MODEL_ID = process.env.OPENAI_PLANNER_MODEL ?? "gpt-5-nano";
+const PLANNER_TIMEOUT_MS = Number(process.env.OPENAI_PLANNER_TIMEOUT_MS ?? 20000);
+
+function normalizePlannerResponse(candidate: unknown, fallback: PlannerResponse): PlannerResponse {
+  if (!candidate || typeof candidate !== "object") return fallback;
+
+  const raw = candidate as Record<string, unknown>;
+  const maybeBaby = raw.babyConfig;
+
+  if (typeof raw.shouldBirth !== "boolean") return fallback;
+  if (typeof raw.windowMinutes !== "number" || Number.isNaN(raw.windowMinutes)) return fallback;
+  if (typeof raw.confidence !== "number" || Number.isNaN(raw.confidence)) return fallback;
+  if (!maybeBaby || typeof maybeBaby !== "object") return fallback;
+
+  return {
+    ...fallback,
+    ...raw,
+    babyConfig: {
+      ...fallback.babyConfig,
+      ...(maybeBaby as Record<string, unknown>),
+      decision: {
+        ...fallback.babyConfig.decision,
+        ...((maybeBaby as Record<string, unknown>).decision as Record<string, unknown>),
+      },
+      genome: {
+        ...fallback.babyConfig.genome,
+        ...((maybeBaby as Record<string, unknown>).genome as Record<string, unknown>),
+      },
+    },
+  } as PlannerResponse;
+}
 
 export async function POST(req: Request) {
   try {
-    const { env, genome } = await req.json();
+    const body = (await req.json()) as {
+      payload?: PlannerPayload;
+      generation?: number;
+    };
 
-    const prompt = `
-You are the reproductive intelligence of a mother robot.
-Return ONLY valid JSON with this exact shape:
-{
-  "summary": string,
-  "hiddenBeliefs": [{"label": string, "value": number}],
-  "candidates": [{"id": string, "name": string, "score": number, "classLabel": string, "rationale": string, "mutations": string[]}],
-  "chosenName": string,
-  "chosenReason": string
-}
+    if (!body.payload) {
+      return Response.json({ error: "Missing payload" }, { status: 400 });
+    }
 
-Rules:
-- hiddenBeliefs must include exactly these labels: attention_risk, stealth_need, offspring_viability, adaptation_pressure, social_fragility
-- each value must be 0-100
-- produce exactly 3 candidates
-- keep candidate names in the style: Embryo Alpha, Embryo Beta, Embryo Gamma
-- mutations should be short phenotype phrases
-- this is a dashboard for a hackathon demo, so write concise but dramatic scientific language
+    const generation = Math.max(1, Math.floor(body.generation ?? 1));
+    const fallback = localPlanner(body.payload, generation);
+    const strictKey = readStrictOpenAIKeyFromEnvLocal();
+    const client = strictKey ? new OpenAI({ apiKey: strictKey }) : null;
 
-Environment JSON:
-${JSON.stringify(env, null, 2)}
-
-Genome JSON:
-${JSON.stringify(genome, null, 2)}
-`;
+    if (!client) {
+      return Response.json({ ...fallback, source: "local", warning: "OPENAI_API_KEY missing in .env.local" });
+    }
 
     const response = await client.responses.create({
-      model: "gpt-5-nano",
-      input: prompt,
+      model: PLANNER_MODEL_ID,
+      input: buildPlannerPrompt(body.payload, generation),
+      max_output_tokens: 1100,
+      store: false,
+      reasoning: { effort: "minimal" },
+      text: {
+        format: { type: "json_object" },
+        verbosity: "low",
+      },
+    }, {
+      timeout: PLANNER_TIMEOUT_MS,
     });
 
     const text = response.output_text?.trim() ?? "";
     const cleaned = text.replace(/^```json\s*/i, "").replace(/^```/, "").replace(/```$/, "").trim();
-    const parsed = JSON.parse(cleaned);
 
-    return Response.json(parsed);
+    if (!cleaned) {
+      return Response.json({ ...fallback, source: "local", warning: "Empty model output" });
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned) as unknown;
+    } catch {
+      return Response.json({
+        ...fallback,
+        source: "local",
+        warning:
+          response.incomplete_details?.reason === "max_output_tokens"
+            ? "Planner JSON truncated at token limit; using local fallback"
+            : "Planner returned invalid JSON; using local fallback",
+      });
+    }
+
+    const normalized = normalizePlannerResponse(parsed, fallback);
+
+    return Response.json({ ...normalized, source: "openai" });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    if (error instanceof Error && /timeout|aborted/i.test(error.message)) {
+      return Response.json({ error: `Planner timed out after ${PLANNER_TIMEOUT_MS}ms` }, { status: 504 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown API route error";
     return Response.json({ error: message }, { status: 500 });
   }
 }
