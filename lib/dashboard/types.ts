@@ -94,7 +94,7 @@ export type PlannerResponse = {
   babyConfig: BabyConfig;
 };
 
-export type ThemeName = "Cipher" | "Zenith" | "Lumen" | "Quartz" | "Tidal";
+export type ThemeName = "Obsidian" | "Cipher" | "Zenith" | "Lumen" | "Quartz" | "Tidal";
 
 export type ThemeTokens = {
   name: ThemeName;

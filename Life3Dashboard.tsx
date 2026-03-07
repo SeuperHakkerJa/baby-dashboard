@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { aggregateScore, evaluateWorldModel, synthesizeGenomeCandidate } from "./lib/dashboard/decision";
+import { aggregateScore, evaluateWorldModel } from "./lib/dashboard/decision";
 import {
-  buildLocalWorldModel,
   type DerivedHistoryPoint,
   type DerivedSnapshot,
   computeDerivedSnapshot,
@@ -29,7 +28,6 @@ type FrameState = {
   derivedHistory: DerivedHistoryPoint[];
 };
 
-const DESKTOP_THEME_OPTIONS: ThemeName[] = ["Cipher", "Zenith", "Quartz", "Tidal", "Lumen"];
 const STREAM_WINDOW = 120;
 
 const ACTUATOR_RANGES = {
@@ -43,8 +41,17 @@ function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
 }
 
+function isClassifiedTheme(themeName: ThemeName) {
+  return themeName === "Cipher" || themeName === "Obsidian";
+}
+
+function isObsidianTheme(themeName: ThemeName) {
+  return themeName === "Obsidian";
+}
+
 function panelGlow(themeName: ThemeName) {
   const map: Record<ThemeName, string> = {
+    Obsidian: "0 24px 72px rgba(255, 242, 0, 0.14)",
     Cipher: "0 30px 90px rgba(15, 23, 42, 0.45)",
     Zenith: "0 28px 80px rgba(12, 65, 95, 0.34)",
     Quartz: "0 28px 80px rgba(76, 35, 92, 0.34)",
@@ -56,13 +63,21 @@ function panelGlow(themeName: ThemeName) {
 }
 
 function classifiedScan(themeName: ThemeName) {
-  if (themeName !== "Cipher") return "transparent";
+  if (!isClassifiedTheme(themeName)) return "transparent";
+
+  if (isObsidianTheme(themeName)) {
+    return "repeating-linear-gradient(0deg, rgba(255,247,0,0.03) 0px, rgba(255,247,0,0.03) 1px, transparent 1px, transparent 4px)";
+  }
 
   return "repeating-linear-gradient(0deg, rgba(148,163,184,0.06) 0px, rgba(148,163,184,0.06) 1px, transparent 1px, transparent 4px)";
 }
 
 function classifiedGrid(themeName: ThemeName) {
-  if (themeName !== "Cipher") return "transparent";
+  if (!isClassifiedTheme(themeName)) return "transparent";
+
+  if (isObsidianTheme(themeName)) {
+    return "linear-gradient(rgba(255,247,0,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,247,0,0.04) 1px, transparent 1px)";
+  }
 
   return "linear-gradient(rgba(148,163,184,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.05) 1px, transparent 1px)";
 }
@@ -93,72 +108,24 @@ function buildDerivedPoint(label: string, snapshot: DerivedSnapshot[]): DerivedH
   };
 }
 
-function WorldModelModal({
-  open,
-  onClose,
-  json,
-  themeName,
-}: {
-  open: boolean;
-  onClose: () => void;
-  json: Record<string, unknown> | null;
-  themeName: ThemeName;
-}) {
-  const theme = THEMES[themeName];
-
-  if (!open || !json) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-4xl rounded-[1.7rem] border p-4 md:p-5"
-        style={{
-          background: theme.panel,
-          borderColor: theme.border,
-          color: theme.text,
-          boxShadow: panelGlow(themeName),
-        }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.24em]" style={{ color: theme.muted }}>
-              Birth Window Output
-            </div>
-            <h3 className="mt-1 text-xl font-semibold">AI-Derived Genome Candidate</h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl border px-3 py-1.5 text-xs uppercase tracking-[0.2em]"
-            style={{ borderColor: theme.border }}
-          >
-            close
-          </button>
-        </div>
-        <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
-          <pre className="max-h-[60vh] overflow-auto text-xs leading-6">{JSON.stringify(json, null, 2)}</pre>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Panel({
   title,
   subtitle,
   right,
   themeName,
+  fillHeight,
   children,
 }: {
   title: string;
   subtitle?: string;
   right?: React.ReactNode;
   themeName: ThemeName;
+  fillHeight?: boolean;
   children: React.ReactNode;
 }) {
   const theme = THEMES[themeName];
   const frameClass =
-    themeName === "Cipher" ? "min-h-0 rounded-xl border p-4 md:p-5" : "min-h-0 rounded-[1.5rem] border p-4 md:p-5";
+    isClassifiedTheme(themeName) ? "min-h-0 rounded-md border p-4 md:p-5" : "min-h-0 rounded-md border p-4 md:p-5";
 
   return (
     <section
@@ -167,8 +134,20 @@ function Panel({
         background: theme.panel,
         borderColor: theme.border,
         boxShadow: panelGlow(themeName),
-        outline: themeName === "Cipher" ? "1px solid rgba(148,163,184,0.14)" : "none",
-        outlineOffset: themeName === "Cipher" ? "-6px" : "0px",
+        ...(fillHeight
+          ? ({
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            } as const)
+          : null),
+        outline: isClassifiedTheme(themeName)
+          ? isObsidianTheme(themeName)
+            ? "1px solid rgba(255, 224, 0, 0.2)"
+            : "1px solid rgba(148,163,184,0.14)"
+          : "none",
+        outlineOffset: isClassifiedTheme(themeName) ? "-6px" : "0px",
       }}
     >
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -182,14 +161,16 @@ function Panel({
         </div>
         {right}
       </div>
-      <div className="min-h-0">{children}</div>
+      <div className="min-h-0" style={fillHeight ? { flex: 1, minHeight: 0 } : undefined}>
+        {children}
+      </div>
     </section>
   );
 }
 
 function IconBadge({ tag }: { tag: string }) {
   return (
-    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-md border px-1 text-[9px] font-semibold uppercase tracking-[0.08em] opacity-85">
+    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-sm border px-1 text-[9px] font-semibold uppercase tracking-[0.08em] opacity-85">
       {tag}
     </span>
   );
@@ -213,7 +194,7 @@ function SensorCard({
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
-  const shellClass = themeName === "Cipher" ? "rounded-xl border p-3" : "rounded-2xl border p-3";
+  const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
 
   return (
     <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
@@ -257,7 +238,7 @@ function DerivedCard({
 }) {
   const theme = THEMES[themeName];
   const normalized = objective === "maximize" ? value : 100 - value;
-  const shellClass = themeName === "Cipher" ? "rounded-xl border p-3" : "rounded-2xl border p-3";
+  const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
 
   return (
     <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
@@ -269,7 +250,7 @@ function DerivedCard({
           </div>
         </div>
         <div
-          className="rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
+          className="rounded-sm px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
           style={{
             color: objective === "maximize" ? "#6ee7b7" : "#fda4af",
             background: objective === "maximize" ? "rgba(16,185,129,0.16)" : "rgba(244,63,94,0.14)",
@@ -296,8 +277,10 @@ function DerivedCard({
 
 type ChartSeries = {
   key: string;
+  label: string;
   color: string;
   strokeWidth?: number;
+  dasharray?: string;
 };
 
 function safeNumber(value: unknown) {
@@ -323,7 +306,7 @@ function SimpleLineChart({
 
   if (data.length < 2) {
     return (
-      <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+      <div className="grid h-full place-items-center rounded-md border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
         Waiting for stream points...
       </div>
     );
@@ -348,20 +331,32 @@ function SimpleLineChart({
   const rightLabel = String(data[data.length - 1]?.t ?? "");
 
   return (
-    <svg className="h-full w-full rounded-2xl border" style={{ borderColor: theme.border, background: theme.subpanel }} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+    <svg className="h-full w-full rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
       {[0, 25, 50, 75, 100].map((level) => (
         <line key={level} x1={padX} x2={width - padX} y1={y(level)} y2={y(level)} stroke={theme.border} strokeDasharray="4 4" strokeWidth="1" />
       ))}
       {series.map((item) => (
-        <polyline
-          key={item.key}
-          points={pointsFor(item.key)}
-          fill="none"
-          stroke={item.color}
-          strokeWidth={item.strokeWidth ?? 2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <g key={item.key}>
+          <polyline
+            points={pointsFor(item.key)}
+            fill="none"
+            stroke={item.color}
+            strokeWidth={(item.strokeWidth ?? 2) + 1.4}
+            strokeOpacity={0.17}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={item.dasharray}
+          />
+          <polyline
+            points={pointsFor(item.key)}
+            fill="none"
+            stroke={item.color}
+            strokeWidth={item.strokeWidth ?? 2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={item.dasharray}
+          />
+        </g>
       ))}
       <text x={padX} y={height - 6} fill={theme.muted} fontSize="11">
         {leftLabel}
@@ -373,9 +368,43 @@ function SimpleLineChart({
   );
 }
 
+function SeriesLegend({
+  series,
+  themeName,
+}: {
+  series: ChartSeries[];
+  themeName: ThemeName;
+}) {
+  const theme = THEMES[themeName];
+
+  if (series.length === 0) return null;
+
+  return (
+    <div className="mb-2 flex flex-wrap gap-2">
+      {series.map((item) => (
+        <div key={item.key} className="inline-flex items-center gap-2 rounded-sm border px-2 py-1 text-[11px]" style={{ borderColor: theme.border, color: theme.muted, background: theme.subpanel }}>
+          <svg width="22" height="8" viewBox="0 0 22 8" aria-hidden="true">
+            <line
+              x1="1"
+              y1="4"
+              x2="21"
+              y2="4"
+              stroke={item.color}
+              strokeWidth={2.1}
+              strokeDasharray={item.dasharray}
+              strokeLinecap="round"
+            />
+          </svg>
+          <span>{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Life3Dashboard() {
   const [hydrated, setHydrated] = useState(false);
-  const [themeName, setThemeName] = useState<ThemeName>("Cipher");
+  const themeName: ThemeName = "Obsidian";
   const [prompt, setPrompt] = useState("");
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -384,7 +413,6 @@ export default function Life3Dashboard() {
   const [modelSource, setModelSource] = useState<"idle" | "openai" | "local">("idle");
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("raw");
   const [worldModel, setWorldModel] = useState<WorldModelSpec | null>(null);
-  const [showGenomeModal, setShowGenomeModal] = useState(false);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [frame, setFrame] = useState<FrameState>(() => {
@@ -409,19 +437,6 @@ export default function Life3Dashboard() {
     () => computeActuatorOutput(frame.sensors, actuatorHazard),
     [actuatorHazard, frame.sensors]
   );
-
-  const candidateGenome = useMemo(() => {
-    if (!worldModel || !forecast.birthWindowOpen) return null;
-    return synthesizeGenomeCandidate(worldModel, frame.sensors, currentDerived, forecast);
-  }, [currentDerived, forecast, frame.sensors, worldModel]);
-
-  const birthRef = useRef(false);
-  useEffect(() => {
-    if (forecast.birthWindowOpen && !birthRef.current) {
-      setShowGenomeModal(true);
-    }
-    birthRef.current = forecast.birthWindowOpen;
-  }, [forecast.birthWindowOpen]);
 
   useEffect(() => {
     setHydrated(true);
@@ -469,24 +484,9 @@ export default function Life3Dashboard() {
 
     setModelBusy(true);
     setModelError(null);
-    setModelWarning("Generating preview now. Replacing with OpenAI response when ready...");
-    setModelTrace(null);
-    setShowGenomeModal(false);
+    setModelWarning(null);
+    setModelTrace("Derived world model generating...");
     setTheaterMode("derived");
-
-    const previewModel = buildLocalWorldModel(trimmed);
-    setModelSource("local");
-    setWorldModel(previewModel);
-    setFrame((prev) => {
-      const derivedHistory = prev.rawHistory.map((point) => {
-        const snapshot = computeDerivedSnapshot(previewModel.definitions, point.sensors);
-        return buildDerivedPoint(point.label, snapshot);
-      });
-      return {
-        ...prev,
-        derivedHistory,
-      };
-    });
 
     try {
       const response = await fetch("/api/world-model", {
@@ -529,6 +529,7 @@ export default function Life3Dashboard() {
       });
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "Unknown world-model generation error");
+      setModelTrace(null);
     } finally {
       setModelBusy(false);
     }
@@ -541,7 +542,6 @@ export default function Life3Dashboard() {
     setModelTrace(null);
     setModelError(null);
     setTheaterMode("raw");
-    setShowGenomeModal(false);
     setFrame((prev) => ({ ...prev, derivedHistory: [] }));
   }, []);
 
@@ -557,98 +557,71 @@ export default function Life3Dashboard() {
     [frame.rawHistory]
   );
 
-  const leadingDerived = useMemo(() => worldModel?.definitions.slice(0, 3) ?? [], [worldModel]);
+  const derivedDefinitions = useMemo(() => worldModel?.definitions ?? [], [worldModel]);
 
   const derivedChartData = useMemo(
     () =>
       frame.derivedHistory.slice(-STREAM_WINDOW).map((point) => {
         const row: Record<string, string | number> = {
           t: point.label,
-          aggregate: point.aggregate,
         };
 
-        for (const item of leadingDerived) {
+        for (const item of derivedDefinitions) {
           row[item.id] = Number((point.values[item.id] ?? 0).toFixed(1));
         }
 
         return row;
       }),
-    [frame.derivedHistory, leadingDerived]
+    [derivedDefinitions, frame.derivedHistory]
+  );
+
+  const rawSeries = useMemo<ChartSeries[]>(
+    () => [
+      { key: "lightLux", label: "Light", color: "#00e5ff", strokeWidth: 2.3, dasharray: "0" },
+      { key: "cameraColorK", label: "Camera", color: "#ff4dff", strokeWidth: 2.1, dasharray: "10 6" },
+      { key: "acousticDb", label: "Acoustic", color: "#7dff7a", strokeWidth: 2.1, dasharray: "4 5" },
+      { key: "temperatureC", label: "Temp", color: "#f7f7f7", strokeWidth: 2.2, dasharray: "14 6" },
+    ],
+    []
+  );
+
+  const derivedSeries = useMemo<ChartSeries[]>(
+    () => {
+      const palette = ["#ffe500", "#00e5ff", "#ff4dff", "#7dff7a", "#f7f7f7", "#ff9e3d"] as const;
+      const dashPatterns = ["0", "8 5", "3 5", "13 6", "2 4", "11 4"] as const;
+
+      return derivedDefinitions.map((item, index) => ({
+        key: item.id,
+        label: item.label,
+        color: palette[index % palette.length],
+        strokeWidth: index === 0 ? 2.5 : 2,
+        dasharray: dashPatterns[index % dashPatterns.length],
+      }));
+    },
+    [derivedDefinitions]
   );
 
   const theme = THEMES[themeName];
+  const obsidian = isObsidianTheme(themeName);
+  const chipFill = obsidian ? "rgba(255,238,0,0.16)" : "transparent";
   const boardIdle = !worldModel;
-  const derivedStatusText = boardIdle ? "derived idle" : `${worldModel.definitions.length} derived states`;
+  const derivedStatusText = modelBusy ? "derived generating" : boardIdle ? "derived idle" : `${worldModel.definitions.length} derived states`;
 
   return (
-    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto p-3 md:p-4" style={{ background: theme.canvas, color: theme.text }}>
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto p-3 md:p-4 xl:overflow-y-hidden" style={{ background: theme.canvas, color: theme.text }}>
       <div className="pointer-events-none fixed inset-0" style={{ backgroundImage: theme.mesh, opacity: 0.78 }} />
       <div
         className="pointer-events-none fixed inset-0"
-        style={{ backgroundImage: classifiedGrid(themeName), backgroundSize: "34px 34px", opacity: 0.45 }}
+        style={{ backgroundImage: classifiedGrid(themeName), backgroundSize: "34px 34px", opacity: obsidian ? 0.2 : 0.45 }}
       />
-      <div className="pointer-events-none fixed inset-0" style={{ backgroundImage: classifiedScan(themeName), opacity: 0.36, mixBlendMode: "screen" }} />
+      <div
+        className="pointer-events-none fixed inset-0"
+        style={{ backgroundImage: classifiedScan(themeName), opacity: obsidian ? 0.16 : 0.36, mixBlendMode: "screen" }}
+      />
 
-      {themeName === "Cipher" ? (
-        <div className="pointer-events-none fixed left-3 top-3 z-20 rounded-md border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]" style={{ borderColor: theme.border, background: "rgba(8,13,16,0.78)", color: theme.muted }}>
-          clearance omega | classified systems theater
-        </div>
-      ) : null}
-
-      <div className="relative z-10 mx-auto grid w-full max-w-[1700px] grid-cols-1 gap-4 xl:min-h-[calc(100dvh-2rem)] xl:grid-cols-12">
-        <div className="grid min-h-0 gap-4 xl:col-span-8 xl:grid-rows-[auto_auto_1fr]">
-          <Panel
-            title="Mother Interface"
-            subtitle="Monitor-only board: measured sensors, derived world model, and live theater history"
-            themeName={themeName}
-            right={
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {DESKTOP_THEME_OPTIONS.map((name) => (
-                  <button
-                    key={name}
-                    onClick={() => setThemeName(name)}
-                    className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]"
-                    style={{
-                      borderColor: theme.border,
-                      color: themeName === name ? theme.text : theme.muted,
-                      background: themeName === name ? theme.subpanel : "transparent",
-                    }}
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
-            }
-          >
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
-                  <IconBadge tag="rs" /> raw stream
-                </div>
-                <div className="mt-2 text-2xl font-semibold">live</div>
-              </div>
-              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
-                  <IconBadge tag="ds" /> derived model
-                </div>
-                <div className="mt-2 text-2xl font-semibold">{derivedStatusText}</div>
-              </div>
-              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
-                  <IconBadge tag="th" /> theater mode
-                </div>
-                <div className="mt-2 text-2xl font-semibold">{theaterMode}</div>
-              </div>
-              <div className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
-                  <IconBadge tag="pt" /> points
-                </div>
-                <div className="mt-2 text-2xl font-semibold">{frame.rawHistory.length}</div>
-              </div>
-            </div>
-          </Panel>
-
-          <div className="grid min-h-0 gap-4 lg:grid-cols-2">
+      <div className="relative z-10 mx-auto grid w-full max-w-[1700px] grid-cols-1 gap-4 xl:h-full xl:grid-cols-12">
+          <div className="grid min-h-0 gap-4 xl:col-span-8 xl:grid-rows-[auto_minmax(0,1fr)]">
+            <div className="grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
             <Panel
               title="Sensor Input"
               subtitle="Measured raw stream (read-only)"
@@ -695,21 +668,29 @@ export default function Life3Dashboard() {
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div style={{ color: theme.muted }}>angle</div>
-                  <div className="font-semibold">{`${actuators.angleDeg.toFixed(1)} ${ACTUATOR_RANGES.angleDeg.unit}`}</div>
+                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
+                    angle
+                  </div>
+                  <div className="font-semibold whitespace-nowrap">{`${actuators.angleDeg.toFixed(1)} ${ACTUATOR_RANGES.angleDeg.unit}`}</div>
                 </div>
-                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div style={{ color: theme.muted }}>light color</div>
-                  <div className="font-semibold">{`${actuators.lightHue.toFixed(1)} ${ACTUATOR_RANGES.lightHue.unit}`}</div>
+                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
+                    light color
+                  </div>
+                  <div className="font-semibold whitespace-nowrap">{`${actuators.lightHue.toFixed(1)} ${ACTUATOR_RANGES.lightHue.unit}`}</div>
                 </div>
-                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div style={{ color: theme.muted }}>light frequency</div>
-                  <div className="font-semibold">{`${actuators.lightFrequencyHz.toFixed(2)} ${ACTUATOR_RANGES.lightFrequencyHz.unit}`}</div>
+                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
+                    light frequency
+                  </div>
+                  <div className="font-semibold whitespace-nowrap">{`${actuators.lightFrequencyHz.toFixed(2)} ${ACTUATOR_RANGES.lightFrequencyHz.unit}`}</div>
                 </div>
-                <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
-                  <div style={{ color: theme.muted }}>pump speed</div>
-                  <div className="font-semibold">{`${actuators.pumpSpeedPct.toFixed(1)} ${ACTUATOR_RANGES.pumpSpeedPct.unit}`}</div>
+                <div className="h-full rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
+                  <div className="min-h-[2rem] leading-tight" style={{ color: theme.muted }}>
+                    pump speed
+                  </div>
+                  <div className="font-semibold whitespace-nowrap">{`${actuators.pumpSpeedPct.toFixed(1)} ${ACTUATOR_RANGES.pumpSpeedPct.unit}`}</div>
                 </div>
               </div>
             </Panel>
@@ -723,7 +704,7 @@ export default function Life3Dashboard() {
               <textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
-                className="h-32 w-full resize-none rounded-2xl border px-3 py-2 text-sm outline-none"
+                className="h-32 w-full resize-none rounded-md border px-3 py-2 text-sm outline-none"
                 style={{
                   borderColor: theme.border,
                   background: theme.subpanel,
@@ -736,34 +717,30 @@ export default function Life3Dashboard() {
                 <button
                   onClick={() => void generateWorldModel()}
                   disabled={modelBusy}
-                  className="rounded-xl border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-55"
-                  style={{ borderColor: theme.border, background: theme.subpanel }}
+                  className="rounded-md border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-55"
+                  style={{
+                    borderColor: theme.border,
+                    background: obsidian ? theme.accent : theme.subpanel,
+                    color: obsidian ? "#090909" : theme.text,
+                    boxShadow: obsidian ? "0 10px 24px rgba(255, 212, 0, 0.22)" : "none",
+                  }}
                 >
                   {modelBusy ? "generating..." : "generate world model"}
                 </button>
                 <button
                   onClick={clearWorldModel}
                   disabled={!worldModel}
-                  className="rounded-xl border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-45"
+                  className="rounded-md border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-45"
                   style={{ borderColor: theme.border }}
                 >
                   clear
                 </button>
-                <div className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border }}>
+                <div className="rounded-sm border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border, background: chipFill }}>
                   model {modelSource}
                 </div>
-                <div className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border }}>
+                <div className="rounded-sm border px-3 py-1 text-[11px] uppercase tracking-[0.2em]" style={{ borderColor: theme.border, background: chipFill }}>
                   {derivedStatusText}
                 </div>
-                {candidateGenome ? (
-                  <button
-                    onClick={() => setShowGenomeModal(true)}
-                    className="rounded-xl border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em]"
-                    style={{ borderColor: theme.border, background: theme.subpanel }}
-                  >
-                    view genome json
-                  </button>
-                ) : null}
               </div>
 
               {modelWarning ? (
@@ -784,15 +761,24 @@ export default function Life3Dashboard() {
             </Panel>
           </div>
 
-          <div ref={derivedPanelRef}>
+          <div ref={derivedPanelRef} className="min-h-0">
             <Panel
               title="Derived World State"
               subtitle="Computed from AI-returned weighted formulas over live sensor values"
               themeName={themeName}
               right={<IconBadge tag="ai" />}
             >
-              {!worldModel ? (
-                <div className="grid h-full min-h-[240px] place-items-center rounded-2xl border" style={{ borderColor: theme.border, background: theme.subpanel }}>
+              {modelBusy ? (
+                <div className="grid h-full min-h-[240px] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                  <div className="max-w-xl text-center">
+                    <div className="text-sm font-semibold uppercase tracking-[0.25em]">generating</div>
+                    <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
+                      Building derived world model from your prompt. Waiting for model output before rendering derived states.
+                    </p>
+                  </div>
+                </div>
+              ) : !worldModel ? (
+                <div className="grid h-full min-h-[240px] place-items-center rounded-md border" style={{ borderColor: theme.border, background: theme.subpanel }}>
                   <div className="max-w-xl text-center">
                     <div className="text-sm font-semibold uppercase tracking-[0.25em]">idle</div>
                     <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
@@ -818,21 +804,20 @@ export default function Life3Dashboard() {
           </div>
         </div>
 
-        <div className="grid min-h-0 gap-4 xl:col-span-4 xl:grid-rows-[auto_1fr]">
-          <Panel
-            title="Formula Register"
-            subtitle="Weighted equations returned by the model and used locally each tick"
-            themeName={themeName}
-            right={<IconBadge tag="fx" />}
-          >
-            {!worldModel ? (
-              <div className="rounded-2xl border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+        <div className="grid min-h-0 gap-4 xl:col-span-4 xl:h-full xl:grid-rows-2 xl:overflow-hidden">
+          <Panel title="Formula Register" subtitle="Weighted equations returned by the model and used locally each tick" themeName={themeName} right={<IconBadge tag="fx" />}>
+            {modelBusy ? (
+              <div className="rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                Generating formula register from prompt...
+              </div>
+            ) : !worldModel ? (
+              <div className="rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
                 Waiting for generated model formulas.
               </div>
             ) : (
-              <div className="max-h-[30vh] space-y-2 overflow-auto pr-1">
+              <div className="space-y-2 pr-1" style={{ maxHeight: "44vh", overflowY: "auto" }}>
                 {worldModel.definitions.map((definition) => (
-                  <div key={definition.id} className="rounded-2xl border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                  <div key={definition.id} className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-semibold">{definition.label}</div>
                       <div className="text-[10px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
@@ -842,7 +827,7 @@ export default function Life3Dashboard() {
                     <div className="mt-2 text-xs" style={{ color: theme.muted }}>
                       {definition.description}
                     </div>
-                    <div className="mt-2 rounded-xl border px-2 py-1.5 text-[11px] leading-relaxed" style={{ borderColor: theme.border }}>
+                    <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px] leading-relaxed" style={{ borderColor: theme.border }}>
                       {formulaText(definition)}
                     </div>
                   </div>
@@ -859,22 +844,22 @@ export default function Life3Dashboard() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setTheaterMode("raw")}
-                  className="rounded-lg border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
+                  className="rounded-sm border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
                   style={{
                     borderColor: theme.border,
-                    background: theaterMode === "raw" ? theme.subpanel : "transparent",
-                    color: theaterMode === "raw" ? theme.text : theme.muted,
+                    background: theaterMode === "raw" ? (obsidian ? theme.accent : theme.subpanel) : "transparent",
+                    color: theaterMode === "raw" ? (obsidian ? "#090909" : theme.text) : theme.muted,
                   }}
                 >
                   raw
                 </button>
                 <button
                   onClick={() => setTheaterMode("derived")}
-                  className="rounded-lg border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
+                  className="rounded-sm border px-2.5 py-1 text-[11px] uppercase tracking-[0.18em]"
                   style={{
                     borderColor: theme.border,
-                    background: theaterMode === "derived" ? theme.subpanel : "transparent",
-                    color: theaterMode === "derived" ? theme.text : theme.muted,
+                    background: theaterMode === "derived" ? (obsidian ? theme.accent : theme.subpanel) : "transparent",
+                    color: theaterMode === "derived" ? (obsidian ? "#090909" : theme.text) : theme.muted,
                   }}
                   disabled={!worldModel}
                 >
@@ -883,79 +868,54 @@ export default function Life3Dashboard() {
               </div>
             }
           >
-            <div className="h-[38vh] min-h-[250px] w-full lg:h-full">
+            <SeriesLegend
+              series={theaterMode === "raw" ? rawSeries : worldModel ? derivedSeries : []}
+              themeName={themeName}
+            />
+            <div className="h-[32vh] min-h-[220px] w-full xl:h-full">
               {!hydrated ? (
-                <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                <div className="grid h-full place-items-center rounded-md border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
                   Loading chart theater...
                 </div>
               ) : theaterMode === "raw" ? (
                 <SimpleLineChart
                   data={rawChartData}
                   themeName={themeName}
-                  series={[
-                    { key: "lightLux", color: theme.chartA, strokeWidth: 2 },
-                    { key: "cameraColorK", color: theme.chartB, strokeWidth: 2 },
-                    { key: "acousticDb", color: theme.chartC, strokeWidth: 2 },
-                    { key: "temperatureC", color: theme.accentAlt, strokeWidth: 2 },
-                  ]}
+                  series={rawSeries}
                 />
               ) : worldModel ? (
                 <SimpleLineChart
                   data={derivedChartData}
                   themeName={themeName}
-                  series={[
-                    { key: "aggregate", color: theme.accent, strokeWidth: 2.2 },
-                    ...leadingDerived.map((item, index) => ({
-                      key: item.id,
-                      color: index === 0 ? theme.chartA : index === 1 ? theme.chartB : theme.chartC,
-                      strokeWidth: 1.8,
-                    })),
-                  ]}
+                  series={derivedSeries}
                 />
               ) : (
-                <div className="grid h-full place-items-center rounded-2xl border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
-                  Derived stream will appear after model generation.
+                <div className="grid h-full place-items-center rounded-md border text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: theme.muted }}>
+                  {modelBusy ? "Generating derived stream..." : "Derived stream will appear after model generation."}
                 </div>
               )}
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
                 <div style={{ color: theme.muted }}>raw points</div>
                 <div className="font-semibold">{frame.rawHistory.length}</div>
               </div>
-              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
                 <div style={{ color: theme.muted }}>derived points</div>
                 <div className="font-semibold">{boardIdle ? "--" : frame.derivedHistory.length}</div>
               </div>
-              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
                 <div style={{ color: theme.muted }}>model source</div>
                 <div className="font-semibold">{modelSource}</div>
               </div>
-              <div className="rounded-xl border px-3 py-2" style={{ borderColor: theme.border }}>
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: theme.border }}>
                 <div style={{ color: theme.muted }}>tick</div>
                 <div className="font-semibold">{frame.tick}</div>
               </div>
             </div>
           </Panel>
         </div>
-      </div>
-
-      <WorldModelModal
-        open={showGenomeModal}
-        onClose={() => setShowGenomeModal(false)}
-        json={candidateGenome as Record<string, unknown> | null}
-        themeName={themeName}
-      />
-
-      <div className="mt-2 px-1 text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
-        {boardIdle
-          ? themeName === "Cipher"
-            ? "raw stream live | derived idle"
-            : "raw stream running | derived idle"
-          : themeName === "Cipher"
-          ? "raw + derived streams live | classified monitor bus"
-          : "raw + derived streams running | monitor-only interface"}
       </div>
     </div>
   );

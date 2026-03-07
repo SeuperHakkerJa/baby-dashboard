@@ -1,4 +1,4 @@
-# Mother Dashboard (One-Page Prompt Pipeline)
+# Systems Dashboard (One-Page Prompt Pipeline)
 
 ## Pipeline behavior
 - Raw sensor input stream is always simulated locally:
@@ -14,15 +14,15 @@
 - Theater supports stream monitoring in two modes:
   - raw telemetry history
   - derived world-state history
-- Birth/genome JSON appears only when birth-window gate is reached.
 
 ## Main files
 - `Life3Dashboard.tsx` : one-page UI + state flow
 - `lib/dashboard/pipeline.ts` : stream simulation + formula execution
-- `lib/dashboard/decision.ts` : aggregate/hazard/forecast + genome candidate synthesis
+- `lib/dashboard/decision.ts` : aggregate/hazard/forecast scoring logic
 - `app/api/world-model/route.ts` : one-shot model generation endpoint
+- `lib/dashboard/world-model-prompt.ts` : standalone prompt text for derived-state generation
 - `lib/dashboard/themes.ts` : dark zen/futuristic theme tokens
-  - includes `Cipher` (default) for a classified cinematic look
+  - includes `Obsidian` (default) for a black + amber classified look
 
 ## Run
 1. `npm i`

@@ -1,6 +1,21 @@
 import type { ThemeName, ThemeTokens } from "./types";
 
 export const THEMES: Record<ThemeName, ThemeTokens> = {
+  Obsidian: {
+    name: "Obsidian",
+    canvas: "linear-gradient(160deg, #000000 0%, #020202 42%, #050505 100%)",
+    mesh: "radial-gradient(circle at 8% 14%, rgba(255,247,0,0.16), transparent 42%), radial-gradient(circle at 84% 82%, rgba(255,247,0,0.08), transparent 44%), linear-gradient(132deg, rgba(0,0,0,0.78), rgba(6,6,6,0.4))",
+    panel: "rgba(3,3,3,0.92)",
+    subpanel: "rgba(8,8,8,0.88)",
+    border: "rgba(255, 235, 0, 0.46)",
+    text: "#fff45c",
+    muted: "rgba(255, 240, 122, 0.8)",
+    accent: "#ffea00",
+    accentAlt: "#fff700",
+    chartA: "#fff700",
+    chartB: "#ffea00",
+    chartC: "#fffdb3",
+  },
   Cipher: {
     name: "Cipher",
     canvas: "linear-gradient(155deg, #040607 0%, #090f12 46%, #10181a 100%)",

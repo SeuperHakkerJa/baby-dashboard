@@ -3,40 +3,11 @@ import OpenAI from "openai";
 import { readStrictOpenAIKeyFromEnvLocal } from "../../../lib/dashboard/env";
 import { buildLocalWorldModel, sanitizeWorldModel } from "../../../lib/dashboard/pipeline";
 import type { WorldModelResponse } from "../../../lib/dashboard/types";
+import { buildWorldModelPrompt } from "../../../lib/dashboard/world-model-prompt";
 
 const WORLD_MODEL_ID = process.env.OPENAI_WORLD_MODEL ?? "gpt-5-nano";
 const WORLD_MODEL_TIMEOUT_MS = Number(process.env.OPENAI_WORLD_TIMEOUT_MS ?? 18000);
 const WORLD_MODEL_MAX_TOKENS = Number(process.env.OPENAI_WORLD_MAX_TOKENS ?? 800);
-
-function promptTemplate(userPrompt: string) {
-  return `Return compact JSON only (no markdown):
-{
-  "title": string,
-  "definitions": [
-    {
-      "id": string,
-      "label": string,
-      "description": string,
-      "objective": "maximize" | "minimize",
-      "weights": {
-        "lightLux": number,
-        "cameraColorK": number,
-        "acousticDb": number,
-        "temperatureC": number
-      },
-      "bias": number
-    }
-  ]
-}
-
-Rules:
-- 4-6 definitions only
-- weights in [-1.5, 1.5]
-- bias in [0, 60]
-- concise labels/descriptions
-
-User prompt: ${userPrompt}`;
-}
 
 function parseJsonLoose(text: string): unknown | null {
   try {
@@ -92,7 +63,7 @@ export async function POST(req: Request) {
     const result = await client.responses.create(
       {
         model: WORLD_MODEL_ID,
-        input: promptTemplate(prompt),
+        input: buildWorldModelPrompt(prompt),
         max_output_tokens: WORLD_MODEL_MAX_TOKENS,
         store: false,
         reasoning: { effort: "minimal" },
