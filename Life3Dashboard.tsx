@@ -610,16 +610,14 @@ function BabyGenomeModal({
                   <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
                     Micro Servo
                   </div>
-                  <div className="mt-1 text-lg font-semibold">
-                    ({result.realizedProjection.microServoAngle}, {result.realizedProjection.microServoAngle})
-                  </div>
+                  <div className="mt-1 text-lg font-semibold">{result.realizedProjection.microServoAngle} deg</div>
                   <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
                     {result.realizedProjection.explanation.microServoAngle}
                   </div>
                 </div>
                 <div className="rounded-md border p-2" style={{ borderColor: theme.border }}>
                   <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
-                    Light
+                    Color
                   </div>
                   <div className="mt-1 text-lg font-semibold">{result.realizedProjection.lightColor}</div>
                   <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
@@ -876,11 +874,15 @@ export default function Life3Dashboard() {
           if (!config) return null;
           const pumpRaw = Number(config.pumpPower);
           const angleRaw = Number(config.microServoAngle);
-          const lightRaw = String(config.lightColor ?? "");
+          const lightRaw = String(config.lightColor ?? "").toLowerCase();
           const pumpPower: BabyDiscreteConfig["pumpPower"] =
             pumpRaw === 50 || pumpRaw === 75 || pumpRaw === 100 ? pumpRaw : 50;
-          const microServoAngle: BabyDiscreteConfig["microServoAngle"] = angleRaw === 90 ? 90 : 0;
-          const lightColor: BabyDiscreteConfig["lightColor"] = lightRaw === "Red" ? "Red" : "Green";
+          const microServoAngle: BabyDiscreteConfig["microServoAngle"] =
+            angleRaw === -90 || angleRaw === -45 || angleRaw === 0 || angleRaw === 45 || angleRaw === 90
+              ? angleRaw
+              : 0;
+          const lightColor: BabyDiscreteConfig["lightColor"] =
+            lightRaw === "red" || lightRaw === "green" || lightRaw === "blue" ? lightRaw : "green";
           return {
             capturedAt: typeof row.capturedAt === "string" ? row.capturedAt : new Date().toISOString(),
             config: { pumpPower, microServoAngle, lightColor },

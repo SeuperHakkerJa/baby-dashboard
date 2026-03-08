@@ -74,12 +74,16 @@ function sanitizeForbiddenConfigs(input: unknown): BabyDiscreteConfig[] {
       const raw = item as Record<string, unknown>;
       const pumpRaw = Number(raw.pumpPower);
       const angleRaw = Number(raw.microServoAngle);
-      const lightRaw = String(raw.lightColor ?? "");
+      const lightRaw = String(raw.lightColor ?? "").toLowerCase();
 
       const pumpPower: BabyDiscreteConfig["pumpPower"] =
         pumpRaw === 50 || pumpRaw === 75 || pumpRaw === 100 ? pumpRaw : 50;
-      const microServoAngle: BabyDiscreteConfig["microServoAngle"] = angleRaw === 90 ? 90 : 0;
-      const lightColor: BabyDiscreteConfig["lightColor"] = lightRaw === "Red" ? "Red" : "Green";
+      const microServoAngle: BabyDiscreteConfig["microServoAngle"] =
+        angleRaw === -90 || angleRaw === -45 || angleRaw === 0 || angleRaw === 45 || angleRaw === 90
+          ? angleRaw
+          : 0;
+      const lightColor: BabyDiscreteConfig["lightColor"] =
+        lightRaw === "red" || lightRaw === "green" || lightRaw === "blue" ? lightRaw : "green";
 
       return {
         pumpPower,

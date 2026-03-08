@@ -20,8 +20,9 @@ Task:
 - Assume high-temperature risk is the primary trigger.
 - Keep values physically plausible for a small embodied robot.
 - Realization semantics for demo:
-  - Redder color => more aggressive baby behavior; greener => less aggressive.
-  - Higher humidity => larger micro-servo angle.
+  - color is discrete: red => more aggressive, green => less aggressive, blue => balanced.
+  - angle is discrete and single-value: -90, -45, 0, 45, 90.
+  - Higher humidity should push toward larger positive angle.
   - Hotter environment => larger size and higher pump-power projection.
 - No rationale text, no extra keys.`;
 

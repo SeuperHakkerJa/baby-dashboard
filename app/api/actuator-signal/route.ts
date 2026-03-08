@@ -28,6 +28,16 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isValidAngle(value: number) {
+  return value === -90 || value === -45 || value === 0 || value === 45 || value === 90;
+}
+
+function normalizeColor(value: string) {
+  const color = value.toLowerCase();
+  if (color === "red" || color === "green" || color === "blue") return color;
+  return null;
+}
+
 export async function POST(req: Request) {
   try {
     if (!ACTUATOR_SIGNAL_URL) {
@@ -41,6 +51,13 @@ export async function POST(req: Request) {
     const projection = body.realizedProjection;
     if (!projection || !isFiniteNumber(projection.pumpPower) || !isFiniteNumber(projection.microServoAngle) || typeof projection.lightColor !== "string") {
       return Response.json({ error: "Valid realizedProjection is required" }, { status: 400 });
+    }
+    if (!isValidAngle(projection.microServoAngle)) {
+      return Response.json({ error: "realizedProjection.microServoAngle must be one of -90, -45, 0, 45, 90" }, { status: 400 });
+    }
+    const color = normalizeColor(projection.lightColor);
+    if (!color) {
+      return Response.json({ error: "realizedProjection.lightColor must be red, green, or blue" }, { status: 400 });
     }
 
     const signal = {
@@ -58,8 +75,8 @@ export async function POST(req: Request) {
       realizedTraits: body.realizedTraits ?? {},
       realizableSignal: {
         pumpPowerPct: projection.pumpPower,
-        microServoAnglePair: [projection.microServoAngle, projection.microServoAngle],
-        lightColor: projection.lightColor,
+        angle: projection.microServoAngle,
+        color,
       },
     };
 
@@ -96,4 +113,3 @@ export async function POST(req: Request) {
     return Response.json({ error: message }, { status: 502 });
   }
 }
-

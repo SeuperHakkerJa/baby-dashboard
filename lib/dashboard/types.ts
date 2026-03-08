@@ -156,8 +156,8 @@ export type BabyTraitConfig = {
 
 export type BabyDiscreteConfig = {
   pumpPower: 50 | 75 | 100;
-  microServoAngle: 0 | 90;
-  lightColor: "Red" | "Green";
+  microServoAngle: -90 | -45 | 0 | 45 | 90;
+  lightColor: "red" | "green" | "blue";
 };
 
 export type BabyRealizedProjection = {

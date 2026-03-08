@@ -48,3 +48,10 @@
 ## Notes
 - If OpenAI is unavailable, `/api/world-model` falls back to a deterministic local model.
 - Run `npm run tw:build` after changing utility classes in `Life3Dashboard.tsx`.
+
+## Actuator Signal Contract
+- Route: `POST /api/actuator-signal`
+- `realizableSignal` payload keys are:
+  - `pumpPowerPct`: `50 | 75 | 100`
+  - `angle`: `-90 | -45 | 0 | 45 | 90`
+  - `color`: `"red" | "green" | "blue"`

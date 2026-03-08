@@ -19,8 +19,8 @@ export const BABY_REALIZATION: BabyRealizationConfig = {
 
 export const DEMO_REALIZABLE_LIMITS = {
   pumpPower: { levels: [50, 75, 100] as const, unit: "%" },
-  microServoAngle: { levels: [0, 90] as const, neutralLeft: 90, neutralRight: 90, unit: "deg" },
-  lightColor: { levels: ["Red", "Green"] as const },
+  microServoAngle: { levels: [-90, -45, 0, 45, 90] as const, unit: "deg" },
+  lightColor: { levels: ["red", "green", "blue"] as const },
 } as const;
 
 function clampValue(value: number, min: number, max: number) {
@@ -72,11 +72,17 @@ function nearestPump(value: number): BabyDiscreteConfig["pumpPower"] {
 }
 
 function nearestAngle(value: number): BabyDiscreteConfig["microServoAngle"] {
-  return value < 45 ? 0 : 90;
+  if (value <= -67.5) return -90;
+  if (value <= -22.5) return -45;
+  if (value <= 22.5) return 0;
+  if (value <= 67.5) return 45;
+  return 90;
 }
 
 function projectedLightColor(aggression: number): BabyDiscreteConfig["lightColor"] {
-  return aggression >= 0.5 ? "Red" : "Green";
+  if (aggression >= 0.67) return "red";
+  if (aggression <= 0.33) return "green";
+  return "blue";
 }
 
 export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfig): BabyRealizedProjection {
@@ -90,7 +96,7 @@ export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfi
     DEMO_REALIZABLE_LIMITS.pumpPower.levels[0],
     DEMO_REALIZABLE_LIMITS.pumpPower.levels[DEMO_REALIZABLE_LIMITS.pumpPower.levels.length - 1]
   );
-  const angleRaw = humidityFactor * 90;
+  const angleRaw = (humidityFactor * 180) - 90;
 
   return {
     pumpPower: nearestPump(pumpRaw),
@@ -98,8 +104,8 @@ export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfi
     lightColor: projectedLightColor(aggression),
     explanation: {
       pumpPower: "Discrete output for demo hardware: pump power can only be 50, 75, or 100.",
-      microServoAngle: "Discrete output for demo hardware: micro-servo angle can only be 0 or 90 (applied as a pair: angle, angle).",
-      lightColor: "Light color is discrete: Red means more aggressive behavior, Green means less aggressive.",
+      microServoAngle: "Discrete output for demo hardware: angle can only be one of -90, -45, 0, 45, 90 degrees.",
+      lightColor: "Color is discrete: red means more aggressive behavior, green less aggressive, blue balanced.",
     },
   };
 }
