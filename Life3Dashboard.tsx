@@ -19,6 +19,7 @@ import {
 import { SENSOR_INPUT_SCHEMA } from "./lib/dashboard/schema";
 import { THEMES } from "./lib/dashboard/themes";
 import type {
+  BabyDiscreteConfig,
   BabyGenomeResponse,
   BabySnapshot,
   DerivedObjective,
@@ -39,7 +40,7 @@ type FrameState = {
 
 const STREAM_WINDOW = 120;
 const HEAT_TRIGGER_SECONDS = 5;
-const DEFAULT_MONITOR_TEMP_THRESHOLD_F = 130;
+const BABY_MEMORY_STORAGE_KEY = "life3_baby_memory_v1";
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
@@ -417,6 +418,7 @@ function BabyGenomeModal({
   loading,
   error,
   result,
+  memory,
   themeName,
   onClose,
 }: {
@@ -424,6 +426,7 @@ function BabyGenomeModal({
   loading: boolean;
   error: string | null;
   result: BabyGenomeResponse | null;
+  memory: Array<{ capturedAt: string; config: BabyDiscreteConfig }>;
   themeName: ThemeName;
   onClose: () => void;
 }) {
@@ -478,8 +481,43 @@ function BabyGenomeModal({
               <div className="mt-2 text-sm" style={{ color: theme.muted }}>
                 tick {result.snapshot.tick} | hot {result.snapshot.hotSeconds}s | threshold {result.snapshot.monitorThresholdF.toFixed(1)}F
               </div>
-              <div className="mt-2 text-sm">{`temp ${result.snapshot.sensors.temperatureF.toFixed(1)}F | acoustic ${result.snapshot.sensors.acousticDb.toFixed(1)}dB`}</div>
-              <div className="text-sm">{`camera ${result.snapshot.sensors.cameraR}/${result.snapshot.sensors.cameraG}/${result.snapshot.sensors.cameraB}`}</div>
+              <div className="mt-2 max-h-32 space-y-1 overflow-auto pr-1 text-sm">
+                {result.snapshot.derived.length === 0 ? (
+                  <div style={{ color: theme.muted }}>no world-model snapshot states</div>
+                ) : (
+                  result.snapshot.derived.map((item) => {
+                    const breached =
+                      item.objective === "maximize"
+                        ? item.value < item.threshold
+                        : item.objective === "minimize"
+                          ? item.value > item.threshold
+                          : item.objective === "monitor"
+                            ? item.value <= 0 || item.value >= item.threshold
+                            : false;
+                    const objectiveLabel =
+                      item.objective === "maximize"
+                        ? `min ${item.threshold.toFixed(1)}`
+                        : item.objective === "minimize"
+                          ? `max ${item.threshold.toFixed(1)}`
+                          : item.objective === "monitor"
+                            ? `0 < x < ${item.threshold.toFixed(1)}f`
+                            : "off";
+                    return (
+                      <div key={item.id} className="flex items-center justify-between gap-2 rounded-sm border px-2 py-1" style={{ borderColor: theme.border }}>
+                        <div className="truncate">
+                          <span className="font-medium">{item.label}</span>
+                          <span className="ml-2 text-[11px]" style={{ color: theme.muted }}>
+                            {objectiveLabel}
+                          </span>
+                        </div>
+                        <div className="font-semibold" style={{ color: breached ? "#fb7185" : theme.text }}>
+                          {item.value.toFixed(1)}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
               <div className="mt-2 text-[11px]" style={{ color: theme.muted }}>
                 source: {result.source} {result.debug?.responseId ? `| id: ${result.debug.responseId}` : ""}
               </div>
@@ -504,7 +542,7 @@ function BabyGenomeModal({
                   <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
                     Pump Power
                   </div>
-                  <div className="mt-1 text-lg font-semibold">{result.realizedProjection.pumpPower.toFixed(1)}%</div>
+                  <div className="mt-1 text-lg font-semibold">{result.realizedProjection.pumpPower}%</div>
                   <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
                     {result.realizedProjection.explanation.pumpPower}
                   </div>
@@ -514,7 +552,7 @@ function BabyGenomeModal({
                     Micro Servo
                   </div>
                   <div className="mt-1 text-lg font-semibold">
-                    ({result.realizedProjection.microServoAngle.left.toFixed(1)}, {result.realizedProjection.microServoAngle.right.toFixed(1)})
+                    ({result.realizedProjection.microServoAngle}, {result.realizedProjection.microServoAngle})
                   </div>
                   <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
                     {result.realizedProjection.explanation.microServoAngle}
@@ -522,15 +560,33 @@ function BabyGenomeModal({
                 </div>
                 <div className="rounded-md border p-2" style={{ borderColor: theme.border }}>
                   <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: theme.muted }}>
-                    Color
+                    Light
                   </div>
-                  <div className="mt-1 text-lg font-semibold">
-                    rgb({result.realizedProjection.color.r},{result.realizedProjection.color.g},{result.realizedProjection.color.b})
-                  </div>
+                  <div className="mt-1 text-lg font-semibold">{result.realizedProjection.lightColor}</div>
                   <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
-                    {result.realizedProjection.explanation.color}
+                    {result.realizedProjection.explanation.lightColor}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div className="rounded-md border p-3 md:col-span-2" style={{ borderColor: theme.border, background: theme.subpanel }}>
+              <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+                In-Session Baby Memory ({memory.length})
+              </div>
+              <div className="mt-2 max-h-28 space-y-1 overflow-auto pr-1 text-[11px]" style={{ color: theme.muted }}>
+                {memory.length === 0 ? (
+                  <div>none</div>
+                ) : (
+                  memory.map((item, index) => (
+                    <div key={`${item.capturedAt}_${index}`}>
+                      #{index + 1} [{item.config.pumpPower} | {item.config.microServoAngle} | {item.config.lightColor}] @{item.capturedAt}
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="mt-2 text-[11px]" style={{ color: theme.muted }}>
+                Next baby generation sends this history to the prompt and forbids repeated discrete configs.
               </div>
             </div>
           </div>
@@ -556,6 +612,7 @@ export default function Life3Dashboard() {
   const [babyBusy, setBabyBusy] = useState(false);
   const [babyError, setBabyError] = useState<string | null>(null);
   const [babyResult, setBabyResult] = useState<BabyGenomeResponse | null>(null);
+  const [babyMemory, setBabyMemory] = useState<Array<{ capturedAt: string; config: BabyDiscreteConfig }>>([]);
   const [hotSeconds, setHotSeconds] = useState(0);
   const [triggerArmed, setTriggerArmed] = useState(true);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
@@ -575,10 +632,10 @@ export default function Life3Dashboard() {
     [frame.sensors, worldModel]
   );
 
-  const monitorThresholdF = useMemo(() => {
-    const monitor = worldModel?.definitions.find((item) => item.id === "fixed_surrounding_temperature" && item.objective === "monitor");
-    return monitor?.threshold ?? DEFAULT_MONITOR_TEMP_THRESHOLD_F;
-  }, [worldModel]);
+  const surroundingTemperatureState = useMemo(
+    () => currentDerived.find((item) => item.id === "fixed_surrounding_temperature"),
+    [currentDerived]
+  );
 
   const generateBabyGenome = useCallback(async (snapshot: BabySnapshot) => {
     setBabyModalOpen(true);
@@ -590,7 +647,10 @@ export default function Life3Dashboard() {
       const response = await fetch("/api/baby-genome", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ snapshot }),
+        body: JSON.stringify({
+          snapshot,
+          forbiddenConfigs: babyMemory.map((item) => item.config),
+        }),
       });
 
       if (!response.ok) {
@@ -600,16 +660,65 @@ export default function Life3Dashboard() {
 
       const data = (await response.json()) as BabyGenomeResponse;
       setBabyResult(data);
+      setBabyMemory((prev) => [
+        ...prev,
+        {
+          capturedAt: data.snapshot.capturedAt,
+          config: {
+            pumpPower: data.realizedProjection.pumpPower,
+            microServoAngle: data.realizedProjection.microServoAngle,
+            lightColor: data.realizedProjection.lightColor,
+          },
+        },
+      ]);
     } catch (error) {
       setBabyError(error instanceof Error ? error.message : "Unknown baby genome generation error");
     } finally {
       setBabyBusy(false);
     }
-  }, []);
+  }, [babyMemory]);
 
   useEffect(() => {
     setHydrated(true);
+    try {
+      const raw = window.localStorage.getItem(BABY_MEMORY_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const loaded = parsed
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const row = item as Record<string, unknown>;
+          const config = row.config as Record<string, unknown> | undefined;
+          if (!config) return null;
+          const pumpRaw = Number(config.pumpPower);
+          const angleRaw = Number(config.microServoAngle);
+          const lightRaw = String(config.lightColor ?? "");
+          const pumpPower: BabyDiscreteConfig["pumpPower"] =
+            pumpRaw === 50 || pumpRaw === 75 || pumpRaw === 100 ? pumpRaw : 50;
+          const microServoAngle: BabyDiscreteConfig["microServoAngle"] = angleRaw === 90 ? 90 : 0;
+          const lightColor: BabyDiscreteConfig["lightColor"] = lightRaw === "Red" ? "Red" : "Green";
+          return {
+            capturedAt: typeof row.capturedAt === "string" ? row.capturedAt : new Date().toISOString(),
+            config: { pumpPower, microServoAngle, lightColor },
+          };
+        })
+        .filter((item): item is { capturedAt: string; config: BabyDiscreteConfig } => item !== null)
+        .slice(-40);
+      setBabyMemory(loaded);
+    } catch {
+      // Ignore corrupted or unavailable localStorage.
+    }
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(BABY_MEMORY_STORAGE_KEY, JSON.stringify(babyMemory.slice(-40)));
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [babyMemory, hydrated]);
 
   useEffect(() => {
     if (!worldModel) return;
@@ -651,35 +760,46 @@ export default function Life3Dashboard() {
 
   useEffect(() => {
     if (frame.tick === 0) return;
-    if (frame.sensors.temperatureF > monitorThresholdF) {
+    // Trigger is strictly gated by derived surrounding temperature state.
+    // If the surrounding temperature derived state does not exist yet, never trigger.
+    if (!surroundingTemperatureState) {
+      setHotSeconds(0);
+      setTriggerArmed(true);
+      return;
+    }
+    const monitorBreached =
+      surroundingTemperatureState.value <= 0 ||
+      surroundingTemperatureState.value >= surroundingTemperatureState.threshold;
+    if (monitorBreached) {
       setHotSeconds((prev) => prev + 1);
       return;
     }
     setHotSeconds(0);
     setTriggerArmed(true);
-  }, [frame.tick, frame.sensors.temperatureF, monitorThresholdF]);
+  }, [frame.tick, surroundingTemperatureState]);
 
   useEffect(() => {
+    if (!surroundingTemperatureState) return;
     if (!triggerArmed || hotSeconds < HEAT_TRIGGER_SECONDS || babyBusy) return;
 
     const snapshot: BabySnapshot = {
       capturedAt: new Date().toISOString(),
       tick: frame.tick,
       hotSeconds: HEAT_TRIGGER_SECONDS,
-      monitorThresholdF: Number(monitorThresholdF.toFixed(1)),
+      monitorThresholdF: Number(surroundingTemperatureState.threshold.toFixed(1)),
       sensors: { ...frame.sensors },
       derived: currentDerived.map((item) => ({
         id: item.id,
         label: item.label,
-        value: item.value,
+        value: Number(item.value.toFixed(1)),
         objective: item.objective,
-        threshold: item.threshold,
+        threshold: Number(item.threshold.toFixed(1)),
       })),
     };
 
     setTriggerArmed(false);
     void generateBabyGenome(snapshot);
-  }, [babyBusy, currentDerived, frame.sensors, frame.tick, generateBabyGenome, hotSeconds, monitorThresholdF, triggerArmed]);
+  }, [babyBusy, currentDerived, frame.sensors, frame.tick, generateBabyGenome, hotSeconds, surroundingTemperatureState, triggerArmed]);
 
   const generateWorldModel = useCallback(async () => {
     const trimmed = prompt.trim();
@@ -1104,6 +1224,7 @@ export default function Life3Dashboard() {
         loading={babyBusy}
         error={babyError}
         result={babyResult}
+        memory={babyMemory}
         themeName={themeName}
         onClose={() => setBabyModalOpen(false)}
       />

@@ -1,4 +1,11 @@
-import type { BabyRealizationConfig, BabyRealizedProjection, BabySnapshot, BabyTraitConfig, BabyTraitMode } from "./types";
+import type {
+  BabyDiscreteConfig,
+  BabyRealizationConfig,
+  BabyRealizedProjection,
+  BabySnapshot,
+  BabyTraitConfig,
+  BabyTraitMode,
+} from "./types";
 
 // Standalone realizability interface for demo tuning.
 // Edit these bounds/modes directly to reflect what your hardware can realize.
@@ -11,14 +18,9 @@ export const BABY_REALIZATION: BabyRealizationConfig = {
 };
 
 export const DEMO_REALIZABLE_LIMITS = {
-  pumpPower: { min: 0, max: 100, unit: "%" },
-  microServoAngle: { min: 0, max: 180, neutralLeft: 90, neutralRight: 90, unit: "deg" },
-  color: {
-    r: { min: 0, max: 255 },
-    g: { min: 0, max: 255 },
-    b: { min: 0, max: 255 },
-    unit: "rgb",
-  },
+  pumpPower: { levels: [50, 75, 100] as const, unit: "%" },
+  microServoAngle: { levels: [0, 90] as const, neutralLeft: 90, neutralRight: 90, unit: "deg" },
+  lightColor: { levels: ["Red", "Green"] as const },
 } as const;
 
 function clampValue(value: number, min: number, max: number) {
@@ -63,53 +65,81 @@ function modeAggression(mode: BabyTraitMode) {
   return 0.2;
 }
 
+function nearestPump(value: number): BabyDiscreteConfig["pumpPower"] {
+  if (value <= 62.5) return 50;
+  if (value <= 87.5) return 75;
+  return 100;
+}
+
+function nearestAngle(value: number): BabyDiscreteConfig["microServoAngle"] {
+  return value < 45 ? 0 : 90;
+}
+
+function projectedLightColor(aggression: number): BabyDiscreteConfig["lightColor"] {
+  return aggression >= 0.5 ? "Red" : "Green";
+}
+
 export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfig): BabyRealizedProjection {
   const thermalDelta = Math.max(0, snapshot.sensors.temperatureF - snapshot.monitorThresholdF);
   const loudnessFactor = clampValue((snapshot.sensors.acousticDb - 10) / 85, 0, 1);
   const speedFactor = clampValue((traits.speed - BABY_REALIZATION.speed.min) / (BABY_REALIZATION.speed.max - BABY_REALIZATION.speed.min), 0, 1);
   const aggression = clampValue(modeAggression(traits.mode) * 0.7 + speedFactor * 0.3, 0, 1);
 
-  const pumpPower = clampValue(
+  const pumpRaw = clampValue(
     22 + traits.bodySize * 0.58 + thermalDelta * 2.1,
-    DEMO_REALIZABLE_LIMITS.pumpPower.min,
-    DEMO_REALIZABLE_LIMITS.pumpPower.max
+    DEMO_REALIZABLE_LIMITS.pumpPower.levels[0],
+    DEMO_REALIZABLE_LIMITS.pumpPower.levels[DEMO_REALIZABLE_LIMITS.pumpPower.levels.length - 1]
   );
-
-  const angleOffset = loudnessFactor * 70;
-  const servoLeft = clampValue(
-    DEMO_REALIZABLE_LIMITS.microServoAngle.neutralLeft + angleOffset,
-    DEMO_REALIZABLE_LIMITS.microServoAngle.min,
-    DEMO_REALIZABLE_LIMITS.microServoAngle.max
-  );
-  const servoRight = clampValue(
-    DEMO_REALIZABLE_LIMITS.microServoAngle.neutralRight + angleOffset,
-    DEMO_REALIZABLE_LIMITS.microServoAngle.min,
-    DEMO_REALIZABLE_LIMITS.microServoAngle.max
-  );
-
-  const red = clampValue(40 + aggression * 215, DEMO_REALIZABLE_LIMITS.color.r.min, DEMO_REALIZABLE_LIMITS.color.r.max);
-  const green = clampValue(
-    40 + (1 - aggression) * 215,
-    DEMO_REALIZABLE_LIMITS.color.g.min,
-    DEMO_REALIZABLE_LIMITS.color.g.max
-  );
-  const blue = clampValue(26 + (1 - loudnessFactor) * 84, DEMO_REALIZABLE_LIMITS.color.b.min, DEMO_REALIZABLE_LIMITS.color.b.max);
+  const angleRaw = loudnessFactor * 90;
 
   return {
-    pumpPower: Number(pumpPower.toFixed(1)),
-    microServoAngle: {
-      left: Number(servoLeft.toFixed(1)),
-      right: Number(servoRight.toFixed(1)),
-    },
-    color: {
-      r: Number(red.toFixed(0)),
-      g: Number(green.toFixed(0)),
-      b: Number(blue.toFixed(0)),
-    },
+    pumpPower: nearestPump(pumpRaw),
+    microServoAngle: nearestAngle(angleRaw),
+    lightColor: projectedLightColor(aggression),
     explanation: {
-      pumpPower: "Hotter environment and larger body-size target increase pump power.",
-      microServoAngle: "Louder environment increases both micro-servo angles from neutral (90,90).",
-      color: "Redder color means more aggressive baby behavior; greener means less aggressive.",
+      pumpPower: "Discrete output for demo hardware: pump power can only be 50, 75, or 100.",
+      microServoAngle: "Discrete output for demo hardware: micro-servo angle can only be 0 or 90 (applied as a pair: angle, angle).",
+      lightColor: "Light color is discrete: Red means more aggressive behavior, Green means less aggressive.",
     },
+  };
+}
+
+export function discreteConfigSignature(config: BabyDiscreteConfig) {
+  return `${config.pumpPower}|${config.microServoAngle}|${config.lightColor}`;
+}
+
+function allDiscreteCombos(): BabyDiscreteConfig[] {
+  const combos: BabyDiscreteConfig[] = [];
+  for (const pumpPower of DEMO_REALIZABLE_LIMITS.pumpPower.levels) {
+    for (const microServoAngle of DEMO_REALIZABLE_LIMITS.microServoAngle.levels) {
+      for (const lightColor of DEMO_REALIZABLE_LIMITS.lightColor.levels) {
+        combos.push({ pumpPower, microServoAngle, lightColor });
+      }
+    }
+  }
+  return combos;
+}
+
+export function ensureUniqueProjection(
+  current: BabyRealizedProjection,
+  forbidden: BabyDiscreteConfig[]
+): { projection: BabyRealizedProjection; adjusted: boolean } {
+  const forbiddenSet = new Set(forbidden.map(discreteConfigSignature));
+  const currentSignature = discreteConfigSignature(current);
+  if (!forbiddenSet.has(currentSignature)) {
+    return { projection: current, adjusted: false };
+  }
+
+  const replacement = allDiscreteCombos().find((combo) => !forbiddenSet.has(discreteConfigSignature(combo)));
+  if (!replacement) {
+    return { projection: current, adjusted: false };
+  }
+
+  return {
+    projection: {
+      ...current,
+      ...replacement,
+    },
+    adjusted: true,
   };
 }

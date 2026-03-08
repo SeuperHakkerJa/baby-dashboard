@@ -156,14 +156,20 @@ export type BabyTraitConfig = {
   mode: BabyTraitMode;
 };
 
+export type BabyDiscreteConfig = {
+  pumpPower: 50 | 75 | 100;
+  microServoAngle: 0 | 90;
+  lightColor: "Red" | "Green";
+};
+
 export type BabyRealizedProjection = {
-  pumpPower: number;
-  microServoAngle: { left: number; right: number };
-  color: { r: number; g: number; b: number };
+  pumpPower: BabyDiscreteConfig["pumpPower"];
+  microServoAngle: BabyDiscreteConfig["microServoAngle"];
+  lightColor: BabyDiscreteConfig["lightColor"];
   explanation: {
     pumpPower: string;
     microServoAngle: string;
-    color: string;
+    lightColor: string;
   };
 };
 
@@ -205,4 +211,9 @@ export type BabyGenomeResponse = {
     latencyMs?: number;
     incompleteReason?: "max_output_tokens" | "content_filter" | null;
   };
+};
+
+export type BabyGenomeRequest = {
+  snapshot: BabySnapshot;
+  forbiddenConfigs?: BabyDiscreteConfig[];
 };
