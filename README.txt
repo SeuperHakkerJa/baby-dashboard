@@ -15,6 +15,7 @@
     - `Surrounding Temperature = temperatureF`
     - `Photon Flux = lightLevel` (monitor threshold: 3000)
   - From then on, derived values are computed locally each second.
+- When a baby popup is triggered, the app auto-sends a prep signal back to the sender Arduino (`/api/sender-signal`), and the popup includes a **retry sender signal** button.
 - Theater supports stream monitoring in two modes:
   - raw telemetry history
   - derived world-state history
@@ -26,6 +27,7 @@
 - `app/api/world-model/route.ts` : one-shot model generation endpoint
 - `app/api/arduino-data/route.ts` : LAN proxy for Arduino sensor payload
 - `app/api/actuator-signal/route.ts` : forwards realized baby signal to actuator device
+- `app/api/sender-signal/route.ts` : sends prep callback signal to the sender Arduino on baby trigger
 - `lib/dashboard/world-model-prompt.ts` : standalone prompt text for derived-state generation
 - `lib/dashboard/themes.ts` : dark zen/futuristic theme tokens
   - includes `Obsidian` (default) for a black + amber classified look
@@ -36,6 +38,8 @@
 3. ensure `.env.local` has `OPENAI_API_KEY=...`
    - optional Arduino input source:
      - `ARDUINO_DATA_URL=http://192.168.41.224/data`
+   - optional sender callback destination (defaults to same host as `ARDUINO_DATA_URL` with `/command` path):
+     - `ARDUINO_SENDER_SIGNAL_URL=http://192.168.41.224/command`
    - optional actuator destination for send button:
      - `ACTUATOR_SIGNAL_URL=http://192.168.41.XXX:PORT/command`
 4. `npm run dev`

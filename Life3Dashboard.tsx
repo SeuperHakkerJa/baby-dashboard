@@ -429,10 +429,15 @@ function BabyGenomeModal({
   error,
   result,
   memory,
+  senderSignalBusy,
+  senderSignalStatus,
+  senderSignalError,
+  canRetrySenderSignal,
   signalBusy,
   signalStatus,
   signalError,
   themeName,
+  onRetrySenderSignal,
   onSendSignal,
   onClose,
 }: {
@@ -441,10 +446,15 @@ function BabyGenomeModal({
   error: string | null;
   result: BabyGenomeResponse | null;
   memory: Array<{ capturedAt: string; config: BabyDiscreteConfig }>;
+  senderSignalBusy: boolean;
+  senderSignalStatus: string | null;
+  senderSignalError: string | null;
+  canRetrySenderSignal: boolean;
   signalBusy: boolean;
   signalStatus: string | null;
   signalError: string | null;
   themeName: ThemeName;
+  onRetrySenderSignal: () => void;
   onSendSignal: () => void;
   onClose: () => void;
 }) {
@@ -484,8 +494,39 @@ function BabyGenomeModal({
           </div>
         ) : null}
 
+        <div className="mt-3 rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+          <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
+            Sender Callback
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onRetrySenderSignal}
+              disabled={senderSignalBusy || !canRetrySenderSignal}
+              className="rounded-sm border px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-55"
+              style={{ borderColor: theme.border }}
+            >
+              {senderSignalBusy ? "retrying..." : "retry sender signal"}
+            </button>
+            {senderSignalStatus ? (
+              <span className="text-[11px]" style={{ color: "#6ee7b7" }}>
+                {senderSignalStatus}
+              </span>
+            ) : senderSignalBusy ? (
+              <span className="text-[11px]" style={{ color: theme.muted }}>
+                sending prep signal to sender...
+              </span>
+            ) : null}
+            {senderSignalError ? (
+              <span className="text-[11px]" style={{ color: "#fb7185" }}>
+                {senderSignalError}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
         {error ? (
-          <div className="rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: "#fb7185" }}>
+          <div className="mt-3 rounded-md border p-3 text-sm" style={{ borderColor: theme.border, background: theme.subpanel, color: "#fb7185" }}>
             {error}
           </div>
         ) : null}
@@ -657,6 +698,10 @@ export default function Life3Dashboard() {
   const [babyBusy, setBabyBusy] = useState(false);
   const [babyError, setBabyError] = useState<string | null>(null);
   const [babyResult, setBabyResult] = useState<BabyGenomeResponse | null>(null);
+  const [babyTriggerSnapshot, setBabyTriggerSnapshot] = useState<BabySnapshot | null>(null);
+  const [senderSignalBusy, setSenderSignalBusy] = useState(false);
+  const [senderSignalStatus, setSenderSignalStatus] = useState<string | null>(null);
+  const [senderSignalError, setSenderSignalError] = useState<string | null>(null);
   const [signalBusy, setSignalBusy] = useState(false);
   const [signalStatus, setSignalStatus] = useState<string | null>(null);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -695,13 +740,50 @@ export default function Life3Dashboard() {
     [currentDerived]
   );
 
+  const sendSenderSignal = useCallback(async (snapshot: BabySnapshot, mode: "auto" | "retry") => {
+    setSenderSignalBusy(true);
+    if (mode === "retry") setSenderSignalStatus(null);
+    setSenderSignalError(null);
+
+    try {
+      const response = await fetch("/api/sender-signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          snapshot,
+          triggerMode: mode,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; destination?: string; upstreamStatus?: number }
+        | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? `Sender callback failed (${response.status})`);
+      }
+
+      const destination = payload.destination ?? "sender device";
+      const status = payload.upstreamStatus ?? 200;
+      setSenderSignalStatus(`prep sent to ${destination} (${status})`);
+    } catch (error) {
+      setSenderSignalError(error instanceof Error ? error.message : "Unknown sender callback error");
+    } finally {
+      setSenderSignalBusy(false);
+    }
+  }, []);
+
   const generateBabyGenome = useCallback(async (snapshot: BabySnapshot) => {
+    setBabyTriggerSnapshot(snapshot);
     setBabyModalOpen(true);
     setBabyBusy(true);
     setBabyError(null);
     setBabyResult(null);
+    setSenderSignalStatus(null);
+    setSenderSignalError(null);
     setSignalStatus(null);
     setSignalError(null);
+    void sendSenderSignal(snapshot, "auto");
 
     try {
       const response = await fetch("/api/baby-genome", {
@@ -736,7 +818,12 @@ export default function Life3Dashboard() {
     } finally {
       setBabyBusy(false);
     }
-  }, [babyMemory]);
+  }, [babyMemory, sendSenderSignal]);
+
+  const retrySenderSignal = useCallback(() => {
+    if (!babyTriggerSnapshot) return;
+    void sendSenderSignal(babyTriggerSnapshot, "retry");
+  }, [babyTriggerSnapshot, sendSenderSignal]);
 
   const sendRealizableSignal = useCallback(async () => {
     if (!babyResult) return;
@@ -1432,10 +1519,15 @@ export default function Life3Dashboard() {
         error={babyError}
         result={babyResult}
         memory={babyMemory}
+        senderSignalBusy={senderSignalBusy}
+        senderSignalStatus={senderSignalStatus}
+        senderSignalError={senderSignalError}
+        canRetrySenderSignal={!!babyTriggerSnapshot}
         signalBusy={signalBusy}
         signalStatus={signalStatus}
         signalError={signalError}
         themeName={themeName}
+        onRetrySenderSignal={() => void retrySenderSignal()}
         onSendSignal={() => void sendRealizableSignal()}
         onClose={() => setBabyModalOpen(false)}
       />
