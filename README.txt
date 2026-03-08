@@ -9,7 +9,11 @@
 - Dashboard is monitor-only (no manual sensor sliders).
 - If no prompt/model is generated, the derived board stays in an idle state.
 - Press **Generate World Model** to call AI once (`/api/world-model`):
-  - AI returns 4-6 derived world-state variables + weighted formulas.
+  - AI returns 3-4 generated derived world-state variables + weighted formulas.
+  - Generated derived states are rendered as `objective: none` with threshold display off.
+  - App also appends 2 fixed identity states:
+    - `Surrounding Temperature = temperatureF`
+    - `Photon Flux = lightLevel` (monitor threshold: 3000)
   - From then on, derived values are computed locally each second.
 - Theater supports stream monitoring in two modes:
   - raw telemetry history

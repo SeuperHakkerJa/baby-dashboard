@@ -5,6 +5,7 @@ const SENSOR_KEYS: SensorKey[] = ["temperatureF", "humidityPct", "lightLevel"];
 const HISTORY_LIMIT = 180;
 
 const FIXED_SURROUNDING_TEMP_ID = "fixed_surrounding_temperature";
+const FIXED_PHOTON_FLUX_ID = "fixed_photon_flux";
 
 export type RawHistoryPoint = {
   label: string;
@@ -85,6 +86,9 @@ function fixedDerivedValue(definitionId: string, sensors: SensorInput) {
   if (definitionId === FIXED_SURROUNDING_TEMP_ID) {
     return Number(sensors.temperatureF.toFixed(1));
   }
+  if (definitionId === FIXED_PHOTON_FLUX_ID) {
+    return Number(sensors.lightLevel.toFixed(0));
+  }
 
   return null;
 }
@@ -92,6 +96,9 @@ function fixedDerivedValue(definitionId: string, sensors: SensorInput) {
 export function formulaText(definition: DerivedDefinition) {
   if (definition.id === FIXED_SURROUNDING_TEMP_ID) {
     return "surroundingTemperature = temperatureF";
+  }
+  if (definition.id === FIXED_PHOTON_FLUX_ID) {
+    return "photonFlux = lightLevel";
   }
 
   const parts: string[] = [];
@@ -160,6 +167,19 @@ const DEFAULT_LABELS = [
 
 const FIXED_DERIVED_DEFINITIONS: DerivedDefinition[] = [
   {
+    id: FIXED_PHOTON_FLUX_ID,
+    label: "Photon Flux",
+    description: "Direct passthrough of measured light sensor level from the Arduino stream.",
+    objective: "monitor",
+    weights: {
+      temperatureF: 0,
+      humidityPct: 0,
+      lightLevel: 0,
+    },
+    bias: 0,
+    threshold: 3000,
+  },
+  {
     id: FIXED_SURROUNDING_TEMP_ID,
     label: "Surrounding Temperature",
     description: "Direct passthrough of measured surrounding temperature in Fahrenheit. Monitor safe band 0F..130F.",
@@ -200,8 +220,8 @@ export function buildLocalWorldModel(prompt: string): WorldModelSpec {
       description: `Derived scalar used by the model to monitor ${label.toLowerCase()}.`,
       weights,
       bias: Number((18 + rnd() * 24).toFixed(1)),
-      threshold: Number((56 + rnd() * 28).toFixed(1)),
-      objective: rnd() > 0.82 ? "none" : rnd() > 0.24 ? "maximize" : "minimize",
+      threshold: 0,
+      objective: "none",
     };
   });
 
@@ -249,23 +269,14 @@ export function sanitizeWorldModel(raw: unknown, prompt: string, fallback: World
 
       const biasRaw = Number(def.bias ?? 0);
       const bias = Number(clamp(Number.isFinite(biasRaw) ? biasRaw : 0, 0, 60).toFixed(1));
-      const thresholdRaw = Number(def.threshold ?? 70);
-      const threshold = Number(clamp(Number.isFinite(thresholdRaw) ? thresholdRaw : 70, 0, 100).toFixed(1));
-
-      const objectiveRaw = typeof def.objective === "string" ? def.objective.toLowerCase() : "";
-      const objective: DerivedObjective =
-        objectiveRaw === "maximize" || objectiveRaw === "minimize" || objectiveRaw === "none" || objectiveRaw === "monitor"
-          ? objectiveRaw
-          : "none";
-
       return {
         id: safeId(String(def.id ?? def.label ?? `state_${index + 1}`), index),
         label: String(def.label ?? `State ${index + 1}`),
         description: String(def.description ?? "Derived model variable."),
         weights,
         bias,
-        threshold,
-        objective,
+        threshold: 0,
+        objective: "none",
       } as DerivedDefinition;
     })
     .filter((item): item is DerivedDefinition => item !== null);

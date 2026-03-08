@@ -186,7 +186,7 @@ function SensorCard({
   icon: React.ReactNode;
   value: string;
   unit: string;
-  range: string;
+  range?: string;
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
@@ -206,9 +206,11 @@ function SensorCard({
           </span>
         ) : null}
       </div>
-      <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
-        {range}
-      </div>
+      {range ? (
+        <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+          {range}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -243,7 +245,7 @@ function DerivedCard({
       : objective === "minimize"
         ? `max ${threshold.toFixed(1)}`
         : objective === "monitor"
-          ? `0 < x < ${threshold.toFixed(1)}f`
+          ? `0 < x < ${threshold.toFixed(1)}`
           : "threshold off";
   const objectiveColor =
     objective === "maximize" ? "#6ee7b7" : objective === "minimize" ? "#fda4af" : objective === "monitor" ? "#facc15" : "#a3a3a3";
@@ -516,7 +518,7 @@ function BabyGenomeModal({
                         : item.objective === "minimize"
                           ? `max ${item.threshold.toFixed(1)}`
                           : item.objective === "monitor"
-                            ? `0 < x < ${item.threshold.toFixed(1)}f`
+                            ? `0 < x < ${item.threshold.toFixed(1)}`
                             : "off";
                     return (
                       <div key={item.id} className="flex items-center justify-between gap-2 rounded-sm border px-2 py-1" style={{ borderColor: theme.border }}>
@@ -650,6 +652,7 @@ export default function Life3Dashboard() {
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("raw");
   const [worldModel, setWorldModel] = useState<WorldModelSpec | null>(null);
   const [debugHeatMode, setDebugHeatMode] = useState(false);
+  const [debugLightMode, setDebugLightMode] = useState(false);
   const [babyModalOpen, setBabyModalOpen] = useState(false);
   const [babyBusy, setBabyBusy] = useState(false);
   const [babyError, setBabyError] = useState<string | null>(null);
@@ -658,11 +661,13 @@ export default function Life3Dashboard() {
   const [signalStatus, setSignalStatus] = useState<string | null>(null);
   const [signalError, setSignalError] = useState<string | null>(null);
   const [babyMemory, setBabyMemory] = useState<Array<{ capturedAt: string; config: BabyDiscreteConfig }>>([]);
-  const [hotSeconds, setHotSeconds] = useState(0);
+  const [tempBreachSeconds, setTempBreachSeconds] = useState(0);
+  const [lightBreachSeconds, setLightBreachSeconds] = useState(0);
   const [triggerArmed, setTriggerArmed] = useState(true);
   const [arduinoOnline, setArduinoOnline] = useState(false);
   const [arduinoStatus, setArduinoStatus] = useState<string | null>(null);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
+  const lastLiveReadingRef = useRef<ArduinoReading | null>(null);
 
   const [frame, setFrame] = useState<FrameState>(() => {
     const sensors = initialSensors();
@@ -683,6 +688,10 @@ export default function Life3Dashboard() {
 
   const surroundingTemperatureState = useMemo(
     () => currentDerived.find((item) => item.id === "fixed_surrounding_temperature"),
+    [currentDerived]
+  );
+  const photonFluxState = useMemo(
+    () => currentDerived.find((item) => item.id === "fixed_photon_flux"),
     [currentDerived]
   );
 
@@ -825,6 +834,7 @@ export default function Life3Dashboard() {
         const payload = (await response.json()) as { reading?: ArduinoReading };
         if (!payload.reading) throw new Error("Arduino reading missing");
         reading = payload.reading;
+        lastLiveReadingRef.current = payload.reading;
         if (alive) {
           setArduinoOnline(true);
           setArduinoStatus(null);
@@ -856,6 +866,13 @@ export default function Life3Dashboard() {
           };
           nextTemperatureC = Number((((nextSensors.temperatureF - 32) * 5) / 9).toFixed(1));
         }
+        if (debugLightMode) {
+          const brightLight = Math.max(2500, Math.min(3500, 3000 + Math.sin(nextTick / 2.4) * 260 + (Math.random() - 0.5) * 120));
+          nextSensors = {
+            ...nextSensors,
+            lightLevel: Number(brightLight.toFixed(0)),
+          };
+        }
         const label = timeLabel(nextTick);
         const rawHistory = pushRawHistory(prev.rawHistory, { label, sensors: nextSensors });
 
@@ -885,36 +902,35 @@ export default function Life3Dashboard() {
       alive = false;
       window.clearInterval(id);
     };
-  }, [debugHeatMode, worldModel]);
+  }, [debugHeatMode, debugLightMode, worldModel]);
 
   useEffect(() => {
     if (frame.tick === 0) return;
-    // Trigger is strictly gated by derived surrounding temperature state.
-    // If the surrounding temperature derived state does not exist yet, never trigger.
-    if (!surroundingTemperatureState) {
-      setHotSeconds(0);
+    const tempBreached = !!surroundingTemperatureState &&
+      (surroundingTemperatureState.value <= 0 || surroundingTemperatureState.value >= surroundingTemperatureState.threshold);
+    const lightBreached = !!photonFluxState && photonFluxState.value > photonFluxState.threshold;
+
+    setTempBreachSeconds((prev) => (tempBreached ? prev + 1 : 0));
+    setLightBreachSeconds((prev) => (lightBreached ? prev + 1 : 0));
+
+    if (!tempBreached && !lightBreached && !babyModalOpen) {
       setTriggerArmed(true);
-      return;
     }
-    const monitorBreached =
-      surroundingTemperatureState.value <= 0 ||
-      surroundingTemperatureState.value >= surroundingTemperatureState.threshold;
-    if (monitorBreached) {
-      setHotSeconds((prev) => prev + 1);
-      return;
-    }
-    setHotSeconds(0);
-    setTriggerArmed(true);
-  }, [frame.tick, surroundingTemperatureState]);
+  }, [babyModalOpen, frame.tick, photonFluxState, surroundingTemperatureState]);
 
   useEffect(() => {
+    const triggeredByTemp = tempBreachSeconds >= HEAT_TRIGGER_SECONDS;
+    const triggeredByLight = lightBreachSeconds >= HEAT_TRIGGER_SECONDS;
+    if (babyModalOpen) return;
+    if (!triggerArmed || babyBusy || (!triggeredByTemp && !triggeredByLight)) return;
     if (!surroundingTemperatureState) return;
-    if (!triggerArmed || hotSeconds < HEAT_TRIGGER_SECONDS || babyBusy) return;
+
+    const triggerSeconds = Math.max(tempBreachSeconds, lightBreachSeconds);
 
     const snapshot: BabySnapshot = {
       capturedAt: new Date().toISOString(),
       tick: frame.tick,
-      hotSeconds: HEAT_TRIGGER_SECONDS,
+      hotSeconds: triggerSeconds,
       monitorThresholdF: Number(surroundingTemperatureState.threshold.toFixed(1)),
       sensors: { ...frame.sensors },
       derived: currentDerived.map((item) => ({
@@ -928,7 +944,7 @@ export default function Life3Dashboard() {
 
     setTriggerArmed(false);
     void generateBabyGenome(snapshot);
-  }, [babyBusy, currentDerived, frame.sensors, frame.tick, generateBabyGenome, hotSeconds, surroundingTemperatureState, triggerArmed]);
+  }, [babyBusy, babyModalOpen, currentDerived, frame.sensors, frame.tick, generateBabyGenome, lightBreachSeconds, surroundingTemperatureState, tempBreachSeconds, triggerArmed]);
 
   const generateWorldModel = useCallback(async () => {
     const trimmed = prompt.trim();
@@ -1099,7 +1115,42 @@ export default function Life3Dashboard() {
                       transformOrigin: "center",
                     }}
                   >
-                    dbg
+                    T
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Toggle light debug mode"
+                    aria-pressed={debugLightMode}
+                    title={debugLightMode ? "debug: light override on" : "debug: light override off"}
+                    onClick={() =>
+                      setDebugLightMode((prev) => {
+                        const next = !prev;
+                        if (!next) {
+                          const last = lastLiveReadingRef.current;
+                          if (last) {
+                            setFrame((framePrev) => ({
+                              ...framePrev,
+                              sensors: {
+                                ...framePrev.sensors,
+                                lightLevel: Number(last.lightLevel.toFixed(0)),
+                              },
+                            }));
+                          }
+                        }
+                        return next;
+                      })
+                    }
+                    className="inline-flex h-3 min-w-[14px] items-center justify-center rounded-sm border px-[1px] text-[6px] font-semibold leading-none uppercase tracking-[0.08em] transition-opacity hover:opacity-100"
+                    style={{
+                      borderColor: debugLightMode ? "#facc15" : theme.border,
+                      color: debugLightMode ? "#facc15" : theme.muted,
+                      background: debugLightMode ? "rgba(250,204,21,0.2)" : theme.subpanel,
+                      boxShadow: debugLightMode ? "0 0 8px rgba(250,204,21,0.2)" : "none",
+                      transform: "scale(0.56)",
+                      transformOrigin: "center",
+                    }}
+                  >
+                    L
                   </button>
                   <span className="rounded-sm border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]" style={{ borderColor: theme.border, color: arduinoOnline ? "#6ee7b7" : "#fb7185" }}>
                     {arduinoOnline ? "lan up" : "lan down"}
@@ -1114,7 +1165,6 @@ export default function Life3Dashboard() {
                   icon={<IconBadge tag="tmp" />}
                   value={formatValue(frame.temperatureC)}
                   unit="°C"
-                  range={`trigger uses ${SENSOR_INPUT_SCHEMA.temperatureF.min}-${SENSOR_INPUT_SCHEMA.temperatureF.max}${SENSOR_INPUT_SCHEMA.temperatureF.unit}`}
                   themeName={themeName}
                 />
                 <SensorCard
@@ -1304,7 +1354,7 @@ export default function Life3Dashboard() {
                         : definition.objective === "minimize"
                           ? `max ${definition.threshold.toFixed(1)}`
                           : definition.objective === "monitor"
-                            ? `0 < x < ${definition.threshold.toFixed(1)}F`
+                            ? `0 < x < ${definition.threshold.toFixed(1)}`
                           : "off"}
                     </div>
                   </div>
