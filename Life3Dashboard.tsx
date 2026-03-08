@@ -681,7 +681,7 @@ export default function Life3Dashboard() {
   useEffect(() => {
     setHydrated(true);
     try {
-      const raw = window.localStorage.getItem(BABY_MEMORY_STORAGE_KEY);
+      const raw = window.sessionStorage.getItem(BABY_MEMORY_STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return;
@@ -707,14 +707,14 @@ export default function Life3Dashboard() {
         .slice(-40);
       setBabyMemory(loaded);
     } catch {
-      // Ignore corrupted or unavailable localStorage.
+      // Ignore corrupted or unavailable sessionStorage.
     }
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     try {
-      window.localStorage.setItem(BABY_MEMORY_STORAGE_KEY, JSON.stringify(babyMemory.slice(-40)));
+      window.sessionStorage.setItem(BABY_MEMORY_STORAGE_KEY, JSON.stringify(babyMemory.slice(-40)));
     } catch {
       // Ignore storage write failures.
     }
