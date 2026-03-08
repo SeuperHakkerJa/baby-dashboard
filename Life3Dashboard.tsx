@@ -584,12 +584,14 @@ function BabyGenomeModal({
 
             <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
               <div className="text-xs uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
-                Traits
+                Ungrounded Interpretation
               </div>
-              <div className="mt-2 text-sm">{`speed ${result.realizedTraits.speed.toFixed(2)} m/s`}</div>
-              <div className="text-sm">{`breathing ${result.realizedTraits.breathingRate.toFixed(1)} rpm`}</div>
-              <div className="text-sm">{`body size ${result.realizedTraits.bodySize.toFixed(1)} cm`}</div>
-              <div className="text-sm">{`mode ${result.realizedTraits.mode}`}</div>
+              <div className="mt-2 text-sm leading-relaxed" style={{ color: theme.text }}>
+                {result.interpretation}
+              </div>
+              <div className="mt-2 text-[11px]" style={{ color: theme.muted }}>
+                Generated before realization constraints for demo narrative.
+              </div>
             </div>
 
             <div className="rounded-md border p-3 md:col-span-2" style={{ borderColor: theme.border, background: theme.subpanel }}>

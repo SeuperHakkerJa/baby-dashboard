@@ -16,6 +16,7 @@
     - `Photon Flux = lightLevel` (monitor threshold: 3000)
   - From then on, derived values are computed locally each second.
 - When a baby popup is triggered, the app auto-sends a prep signal back to the sender Arduino (`/api/sender-signal`), and the popup includes a **retry sender signal** button.
+- Baby generation also includes a short model-written interpretation line (up to 40 words) describing the current world-model situation and desired offspring profile before hardware realization constraints.
 - Theater supports stream monitoring in two modes:
   - raw telemetry history
   - derived world-state history

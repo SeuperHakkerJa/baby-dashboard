@@ -115,16 +115,47 @@ function buildLocalTraits(snapshot: BabySnapshot): BabyTraitConfig {
   return { speed, breathingRate, bodySize, mode };
 }
 
-function sanitizeTraits(candidate: unknown, fallback: BabyTraitConfig): BabyTraitConfig {
-  if (!candidate || typeof candidate !== "object") return fallback;
+function buildLocalInterpretation(snapshot: BabySnapshot) {
+  const tempState = snapshot.derived.find((item) => item.id === "fixed_surrounding_temperature");
+  const lightState = snapshot.derived.find((item) => item.id === "fixed_photon_flux");
+  const heatBreached = !!tempState && (tempState.value <= 0 || tempState.value >= tempState.threshold);
+  const lightBreached = !!lightState && lightState.value > lightState.threshold;
+
+  const regime = heatBreached && lightBreached
+    ? "heat and photon overload"
+    : heatBreached
+      ? "thermal overload"
+      : lightBreached
+        ? "photon overload"
+        : "rising environmental stress";
+
+  return `Current body cannot safely sustain ${regime}; birth should create a successor body specialized for this regime, with stronger stress tolerance, faster recovery, and stable operation under persistent exposure.`;
+}
+
+function normalizeInterpretation(text: string) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  const words = compact.split(" ").filter(Boolean);
+  return words.slice(0, 40).join(" ");
+}
+
+function sanitizeInterpretation(candidate: unknown, fallback: string) {
+  if (!candidate) return fallback;
+  if (typeof candidate === "string") {
+    const normalized = normalizeInterpretation(candidate);
+    return normalized || fallback;
+  }
+  if (typeof candidate !== "object") return fallback;
+
   const root = candidate as Record<string, unknown>;
-  const raw = (root.traits && typeof root.traits === "object" ? root.traits : root) as Record<string, unknown>;
-  return {
-    speed: Number(raw.speed ?? fallback.speed),
-    breathingRate: Number(raw.breathingRate ?? fallback.breathingRate),
-    bodySize: Number(raw.bodySize ?? fallback.bodySize),
-    mode: String(raw.mode ?? fallback.mode) as BabyTraitConfig["mode"],
-  };
+  const picks = [root.interpretation, root.story, root.summary];
+  for (const pick of picks) {
+    if (typeof pick !== "string") continue;
+    const normalized = normalizeInterpretation(pick);
+    if (normalized) return normalized;
+  }
+
+  return fallback;
 }
 
 export async function POST(req: Request) {
@@ -145,6 +176,7 @@ export async function POST(req: Request) {
     const localRealized = realizeBabyTraits(localProposed);
     const localProjectionBase = projectBabyTraits(snapshot, localRealized);
     const localProjectionResult = ensureUniqueProjection(localProjectionBase, forbiddenConfigs);
+    const localInterpretation = buildLocalInterpretation(snapshot);
 
     const strictKey = readStrictOpenAIKeyFromEnvLocal();
     const client = strictKey ? new OpenAI({ apiKey: strictKey }) : null;
@@ -152,6 +184,7 @@ export async function POST(req: Request) {
       const response: BabyGenomeResponse = {
         source: "local",
         snapshot,
+        interpretation: localInterpretation,
         proposed: localProposed,
         realizedTraits: localRealized,
         realizedProjection: localProjectionResult.projection,
@@ -187,19 +220,19 @@ export async function POST(req: Request) {
 
     const cleaned = (result.output_text ?? "").replace(/^```json\s*/i, "").replace(/^```/, "").replace(/```$/, "").trim();
     const parsed = cleaned ? parseJsonLoose(cleaned) : null;
-    const rawProposed = sanitizeTraits(parsed, localProposed);
-    const proposed = realizeBabyTraits(rawProposed);
-    const projectionBase = projectBabyTraits(snapshot, proposed);
+    const interpretation = sanitizeInterpretation(parsed, localInterpretation);
+    const projectionBase = projectBabyTraits(snapshot, localRealized);
     const projectionResult = ensureUniqueProjection(projectionBase, forbiddenConfigs);
 
     const response: BabyGenomeResponse = {
       source: "openai",
       snapshot,
-      proposed: rawProposed,
-      realizedTraits: proposed,
+      interpretation,
+      proposed: localProposed,
+      realizedTraits: localRealized,
       realizedProjection: projectionResult.projection,
       warning: !parsed
-        ? "OpenAI returned invalid/empty JSON; values normalized from local fallback"
+        ? "OpenAI returned invalid/empty JSON; interpretation text fell back to local synthesis"
         : projectionResult.adjusted
           ? "Projected config adjusted to avoid previous baby config"
           : undefined,

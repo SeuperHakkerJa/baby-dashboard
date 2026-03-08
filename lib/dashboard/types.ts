@@ -197,6 +197,7 @@ export type BabySnapshot = {
 export type BabyGenomeResponse = {
   source: "openai" | "local";
   snapshot: BabySnapshot;
+  interpretation: string;
   proposed: BabyTraitConfig;
   realizedTraits: BabyTraitConfig;
   realizedProjection: BabyRealizedProjection;
