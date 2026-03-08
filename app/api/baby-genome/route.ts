@@ -58,10 +58,8 @@ function isValidSnapshot(input: unknown): input is BabySnapshot {
     isFiniteNumber(snapshot.monitorThresholdF) &&
     !!sensors &&
     isFiniteNumber(sensors.temperatureF) &&
-    isFiniteNumber(sensors.cameraR) &&
-    isFiniteNumber(sensors.cameraG) &&
-    isFiniteNumber(sensors.cameraB) &&
-    isFiniteNumber(sensors.acousticDb) &&
+    isFiniteNumber(sensors.humidityPct) &&
+    isFiniteNumber(sensors.lightLevel) &&
     !!derived &&
     derived.every((item) => isValidDerivedItem(item)) &&
     hasSurrounding
@@ -105,8 +103,8 @@ function buildLocalTraits(snapshot: BabySnapshot): BabyTraitConfig {
   }).length;
   const ambientStress = snapshot.derived.length > 0 ? derivedBreaches / snapshot.derived.length : 0;
 
-  const speed = 1.0 + thermalDelta * 0.05 + snapshot.sensors.acousticDb * 0.006 + ambientStress * 0.45;
-  const breathingRate = 16 + thermalDelta * 0.58 + snapshot.sensors.acousticDb * 0.16 + ambientStress * 6;
+  const speed = 1.0 + thermalDelta * 0.05 + snapshot.sensors.humidityPct * 0.004 + ambientStress * 0.45;
+  const breathingRate = 16 + thermalDelta * 0.58 + snapshot.sensors.humidityPct * 0.1 + ambientStress * 6;
   const bodySize = 34 + thermalDelta * 0.9 + ambientStress * 8;
   const mode = thermalDelta > 8 || ambientStress > 0.55 ? "heat-shield" : thermalDelta > 3 ? "balanced" : "conserve";
 

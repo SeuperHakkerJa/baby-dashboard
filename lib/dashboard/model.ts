@@ -16,63 +16,12 @@ const HISTORY_LIMIT = 180;
 
 const IDEAL = {
   temperatureF: { min: 68, max: 79 },
-  acousticDb: { min: 18, max: 42 },
-  cameraR: { min: 105, max: 190 },
-  cameraG: { min: 105, max: 190 },
-  cameraB: { min: 105, max: 210 },
+  humidityPct: { min: 30, max: 60 },
+  lightLevel: { min: 260, max: 1800 },
 };
 
 export function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
-}
-
-function rgbToHueDeg(r: number, g: number, b: number) {
-  const rn = clamp(r, 0, 255) / 255;
-  const gn = clamp(g, 0, 255) / 255;
-  const bn = clamp(b, 0, 255) / 255;
-
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const delta = max - min;
-
-  if (delta === 0) return 0;
-
-  let hue = 0;
-  if (max === rn) {
-    hue = ((gn - bn) / delta) % 6;
-  } else if (max === gn) {
-    hue = (bn - rn) / delta + 2;
-  } else {
-    hue = (rn - gn) / delta + 4;
-  }
-
-  const deg = hue * 60;
-  return deg < 0 ? deg + 360 : deg;
-}
-
-function cameraScore(sensors: SensorInput) {
-  const r = centeredScore(
-    sensors.cameraR,
-    IDEAL.cameraR.min,
-    IDEAL.cameraR.max,
-    SENSOR_INPUT_SCHEMA.cameraR.min,
-    SENSOR_INPUT_SCHEMA.cameraR.max
-  );
-  const g = centeredScore(
-    sensors.cameraG,
-    IDEAL.cameraG.min,
-    IDEAL.cameraG.max,
-    SENSOR_INPUT_SCHEMA.cameraG.min,
-    SENSOR_INPUT_SCHEMA.cameraG.max
-  );
-  const b = centeredScore(
-    sensors.cameraB,
-    IDEAL.cameraB.min,
-    IDEAL.cameraB.max,
-    SENSOR_INPUT_SCHEMA.cameraB.min,
-    SENSOR_INPUT_SCHEMA.cameraB.max
-  );
-  return (r + g + b) / 3;
 }
 
 function centeredScore(value: number, min: number, max: number, hardMin: number, hardMax: number) {
@@ -123,22 +72,28 @@ export function deriveState(sensors: SensorInput, history: HistoryPoint[]): Deri
     SENSOR_INPUT_SCHEMA.temperatureF.min,
     SENSOR_INPUT_SCHEMA.temperatureF.max
   );
-  const acousticScore = centeredScore(
-    sensors.acousticDb,
-    IDEAL.acousticDb.min,
-    IDEAL.acousticDb.max,
-    SENSOR_INPUT_SCHEMA.acousticDb.min,
-    SENSOR_INPUT_SCHEMA.acousticDb.max
+  const humidityScore = centeredScore(
+    sensors.humidityPct,
+    IDEAL.humidityPct.min,
+    IDEAL.humidityPct.max,
+    SENSOR_INPUT_SCHEMA.humidityPct.min,
+    SENSOR_INPUT_SCHEMA.humidityPct.max
   );
-  const visualScore = cameraScore(sensors);
+  const lightScore = centeredScore(
+    sensors.lightLevel,
+    IDEAL.lightLevel.min,
+    IDEAL.lightLevel.max,
+    SENSOR_INPUT_SCHEMA.lightLevel.min,
+    SENSOR_INPUT_SCHEMA.lightLevel.max
+  );
 
-  const stability = clamp(visualScore * 0.34 + acousticScore * 0.31 + thermalScore * 0.35);
-  const noisePenalty = clamp((sensors.acousticDb - 40) * 2.2, 0, 100);
+  const stability = clamp(lightScore * 0.34 + humidityScore * 0.31 + thermalScore * 0.35);
+  const humidityPenalty = clamp((sensors.humidityPct - 55) * 2.2, 0, 100);
   const thermalPenalty = clamp(Math.abs(sensors.temperatureF - 73) * 2.7, 0, 100);
   const volatility = std(history.slice(-15).map((p) => p.derived.stability));
 
-  const hazardIndex = clamp((100 - stability) * 0.6 + noisePenalty * 0.2 + thermalPenalty * 0.12 + volatility * 1.2);
-  const signalQuality = clamp(visualScore * 0.64 + acousticScore * 0.18 + thermalScore * 0.18);
+  const hazardIndex = clamp((100 - stability) * 0.6 + humidityPenalty * 0.2 + thermalPenalty * 0.12 + volatility * 1.2);
+  const signalQuality = clamp(lightScore * 0.64 + humidityScore * 0.18 + thermalScore * 0.18);
 
   const slope = trendSlope(history);
   const slopePerMinute = slope * 60;
@@ -180,9 +135,8 @@ export function deriveState(sensors: SensorInput, history: HistoryPoint[]): Deri
 }
 
 export function recommendActuators(sensors: SensorInput, derived: DerivedState): ActuatorOutput {
-  const hueDeg = rgbToHueDeg(sensors.cameraR, sensors.cameraG, sensors.cameraB);
-  const angleDeg = clamp(88 + (hueDeg - 180) * 0.06 - (sensors.acousticDb - 35) * 0.55, 8, 172);
-  const lightHue = clamp(hueDeg + (derived.hazardIndex - 50) * 0.25, 0, 360);
+  const angleDeg = clamp(88 + (sensors.lightLevel / Math.max(SENSOR_INPUT_SCHEMA.lightLevel.max, 1)) * 36 - (sensors.humidityPct - 35) * 0.55, 8, 172);
+  const lightHue = clamp(110 + (derived.hazardIndex - 50) * 0.8, 0, 360);
   const lightFrequencyHz = Number((clamp(0.8 + derived.hazardIndex * 0.045, 0.2, 8.8) / 1).toFixed(2));
   const pumpSpeedPct = clamp(34 + (sensors.temperatureF - 72) * 2 + derived.hazardIndex * 0.42, 5, 100);
 
@@ -227,14 +181,13 @@ export function decideBirth(derived: DerivedState, thresholds: SurvivalThreshold
 }
 
 export function buildGenomeVector(sensors: SensorInput, derived: DerivedState, decision: BirthDecision): GenomeVector {
-  const hue = rgbToHueDeg(sensors.cameraR, sensors.cameraG, sensors.cameraB);
-  const chromaAverage = (sensors.cameraR + sensors.cameraG + sensors.cameraB) / 3;
+  const lightNormalized = clamp((sensors.lightLevel / Math.max(SENSOR_INPUT_SCHEMA.lightLevel.max, 1)) * 100);
 
   return {
     thermalTolerance: clamp(52 + (74 - sensors.temperatureF) * 1.2 + derived.stability * 0.22),
-    acousticShielding: clamp(34 + sensors.acousticDb * 0.7 + derived.hazardIndex * 0.22),
-    photonicAdaptation: clamp(40 + hue * 0.08 + derived.signalQuality * 0.24),
-    chromaticSensitivity: clamp(30 + chromaAverage * 0.18 + derived.signalQuality * 0.48),
+    acousticShielding: clamp(34 + sensors.humidityPct * 0.7 + derived.hazardIndex * 0.22),
+    photonicAdaptation: clamp(40 + lightNormalized * 0.4 + derived.signalQuality * 0.24),
+    chromaticSensitivity: clamp(30 + lightNormalized * 0.26 + derived.signalQuality * 0.48),
     fluidRegulation: clamp(45 + derived.hazardIndex * 0.35 + (sensors.temperatureF - 72) * 0.9),
     orientationControl: clamp(52 + derived.modelConfidence * 0.3 + (100 - derived.hazardIndex) * 0.2),
     sensorFusion: clamp(42 + derived.signalQuality * 0.52 + derived.modelConfidence * 0.24),
@@ -253,10 +206,8 @@ export function buildBabyConfig(generation: number, payload: PlannerPayload, dec
     objective: MODEL_OBJECTIVE,
     sensorMeaning: {
       temperatureF: SENSOR_INPUT_SCHEMA.temperatureF.meaning,
-      cameraR: SENSOR_INPUT_SCHEMA.cameraR.meaning,
-      cameraG: SENSOR_INPUT_SCHEMA.cameraG.meaning,
-      cameraB: SENSOR_INPUT_SCHEMA.cameraB.meaning,
-      acousticDb: SENSOR_INPUT_SCHEMA.acousticDb.meaning,
+      humidityPct: SENSOR_INPUT_SCHEMA.humidityPct.meaning,
+      lightLevel: SENSOR_INPUT_SCHEMA.lightLevel.meaning,
     },
     actuatorControl: {
       angleDeg: ACTUATOR_OUTPUT_SCHEMA.angleDeg.meaning,
@@ -310,10 +261,8 @@ export function safePointLabel(index: number) {
 export function buildInitialSensors(): SensorInput {
   return {
     temperatureF: 74.2,
-    cameraR: 152,
-    cameraG: 173,
-    cameraB: 204,
-    acousticDb: 34.5,
+    humidityPct: 35,
+    lightLevel: 567,
   };
 }
 
@@ -322,25 +271,18 @@ export function simulateSensorStep(prev: SensorInput): SensorInput {
 
   const next: SensorInput = {
     temperatureF: clamp(jitter(prev.temperatureF, 1.5), SENSOR_INPUT_SCHEMA.temperatureF.min, SENSOR_INPUT_SCHEMA.temperatureF.max),
-    cameraR: clamp(jitter(prev.cameraR, 16), SENSOR_INPUT_SCHEMA.cameraR.min, SENSOR_INPUT_SCHEMA.cameraR.max),
-    cameraG: clamp(jitter(prev.cameraG, 16), SENSOR_INPUT_SCHEMA.cameraG.min, SENSOR_INPUT_SCHEMA.cameraG.max),
-    cameraB: clamp(jitter(prev.cameraB, 16), SENSOR_INPUT_SCHEMA.cameraB.min, SENSOR_INPUT_SCHEMA.cameraB.max),
-    acousticDb: clamp(jitter(prev.acousticDb, 3.2), SENSOR_INPUT_SCHEMA.acousticDb.min, SENSOR_INPUT_SCHEMA.acousticDb.max),
+    humidityPct: clamp(jitter(prev.humidityPct, 2.5), SENSOR_INPUT_SCHEMA.humidityPct.min, SENSOR_INPUT_SCHEMA.humidityPct.max),
+    lightLevel: clamp(jitter(prev.lightLevel, 84), SENSOR_INPUT_SCHEMA.lightLevel.min, SENSOR_INPUT_SCHEMA.lightLevel.max),
   };
 
-  if (Math.random() > 0.95) next.acousticDb = clamp(next.acousticDb + 7, SENSOR_INPUT_SCHEMA.acousticDb.min, SENSOR_INPUT_SCHEMA.acousticDb.max);
+  if (Math.random() > 0.95) next.humidityPct = clamp(next.humidityPct + 4, SENSOR_INPUT_SCHEMA.humidityPct.min, SENSOR_INPUT_SCHEMA.humidityPct.max);
   if (Math.random() > 0.965) next.temperatureF = clamp(next.temperatureF + 3.2, SENSOR_INPUT_SCHEMA.temperatureF.min, SENSOR_INPUT_SCHEMA.temperatureF.max);
-  if (Math.random() > 0.97) {
-    next.cameraR = clamp(next.cameraR + 22, SENSOR_INPUT_SCHEMA.cameraR.min, SENSOR_INPUT_SCHEMA.cameraR.max);
-    next.cameraB = clamp(next.cameraB - 18, SENSOR_INPUT_SCHEMA.cameraB.min, SENSOR_INPUT_SCHEMA.cameraB.max);
-  }
+  if (Math.random() > 0.97) next.lightLevel = clamp(next.lightLevel + 220, SENSOR_INPUT_SCHEMA.lightLevel.min, SENSOR_INPUT_SCHEMA.lightLevel.max);
 
   return {
     temperatureF: Number(next.temperatureF.toFixed(1)),
-    cameraR: Number(next.cameraR.toFixed(0)),
-    cameraG: Number(next.cameraG.toFixed(0)),
-    cameraB: Number(next.cameraB.toFixed(0)),
-    acousticDb: Number(next.acousticDb.toFixed(1)),
+    humidityPct: Number(next.humidityPct.toFixed(1)),
+    lightLevel: Number(next.lightLevel.toFixed(0)),
   };
 }
 

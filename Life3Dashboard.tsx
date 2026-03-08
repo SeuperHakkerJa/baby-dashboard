@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { aggregateScore } from "./lib/dashboard/decision";
 import {
-  cameraRgbPercent,
   type DerivedHistoryPoint,
   type DerivedSnapshot,
   computeDerivedSnapshot,
@@ -13,7 +12,6 @@ import {
   pushDerivedHistory,
   pushRawHistory,
   sensorPercent,
-  simulateSensorStep,
   timeLabel,
 } from "./lib/dashboard/pipeline";
 import { SENSOR_INPUT_SCHEMA } from "./lib/dashboard/schema";
@@ -34,8 +32,18 @@ type TheaterMode = "raw" | "derived";
 type FrameState = {
   tick: number;
   sensors: SensorInput;
+  temperatureC: number;
+  lightState: string;
   rawHistory: Array<{ label: string; sensors: SensorInput }>;
   derivedHistory: DerivedHistoryPoint[];
+};
+
+type ArduinoReading = {
+  temperatureC: number;
+  temperatureF: number;
+  humidityPct: number;
+  lightLevel: number;
+  lightState: string;
 };
 
 const STREAM_WINDOW = 120;
@@ -419,7 +427,11 @@ function BabyGenomeModal({
   error,
   result,
   memory,
+  signalBusy,
+  signalStatus,
+  signalError,
   themeName,
+  onSendSignal,
   onClose,
 }: {
   open: boolean;
@@ -427,7 +439,11 @@ function BabyGenomeModal({
   error: string | null;
   result: BabyGenomeResponse | null;
   memory: Array<{ capturedAt: string; config: BabyDiscreteConfig }>;
+  signalBusy: boolean;
+  signalStatus: string | null;
+  signalError: string | null;
   themeName: ThemeName;
+  onSendSignal: () => void;
   onClose: () => void;
 }) {
   const theme = THEMES[themeName];
@@ -568,6 +584,32 @@ function BabyGenomeModal({
                   </div>
                 </div>
               </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onSendSignal}
+                  disabled={signalBusy}
+                  className="rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-55"
+                  style={{
+                    borderColor: theme.border,
+                    background: "#f7e500",
+                    color: "#090909",
+                    boxShadow: "0 8px 20px rgba(255,229,0,0.18)",
+                  }}
+                >
+                  {signalBusy ? "sending..." : "send realizable signal"}
+                </button>
+                {signalStatus ? (
+                  <div className="text-[11px]" style={{ color: "#6ee7b7" }}>
+                    {signalStatus}
+                  </div>
+                ) : null}
+                {signalError ? (
+                  <div className="text-[11px]" style={{ color: "#fb7185" }}>
+                    {signalError}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <div className="rounded-md border p-3 md:col-span-2" style={{ borderColor: theme.border, background: theme.subpanel }}>
@@ -612,9 +654,14 @@ export default function Life3Dashboard() {
   const [babyBusy, setBabyBusy] = useState(false);
   const [babyError, setBabyError] = useState<string | null>(null);
   const [babyResult, setBabyResult] = useState<BabyGenomeResponse | null>(null);
+  const [signalBusy, setSignalBusy] = useState(false);
+  const [signalStatus, setSignalStatus] = useState<string | null>(null);
+  const [signalError, setSignalError] = useState<string | null>(null);
   const [babyMemory, setBabyMemory] = useState<Array<{ capturedAt: string; config: BabyDiscreteConfig }>>([]);
   const [hotSeconds, setHotSeconds] = useState(0);
   const [triggerArmed, setTriggerArmed] = useState(true);
+  const [arduinoOnline, setArduinoOnline] = useState(false);
+  const [arduinoStatus, setArduinoStatus] = useState<string | null>(null);
   const derivedPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [frame, setFrame] = useState<FrameState>(() => {
@@ -622,6 +669,8 @@ export default function Life3Dashboard() {
     return {
       tick: 0,
       sensors,
+      temperatureC: Number((((sensors.temperatureF - 32) * 5) / 9).toFixed(1)),
+      lightState: "UNKNOWN",
       rawHistory: [{ label: timeLabel(0), sensors }],
       derivedHistory: [],
     };
@@ -642,6 +691,8 @@ export default function Life3Dashboard() {
     setBabyBusy(true);
     setBabyError(null);
     setBabyResult(null);
+    setSignalStatus(null);
+    setSignalError(null);
 
     try {
       const response = await fetch("/api/baby-genome", {
@@ -677,6 +728,42 @@ export default function Life3Dashboard() {
       setBabyBusy(false);
     }
   }, [babyMemory]);
+
+  const sendRealizableSignal = useCallback(async () => {
+    if (!babyResult) return;
+    setSignalBusy(true);
+    setSignalError(null);
+    setSignalStatus(null);
+
+    try {
+      const response = await fetch("/api/actuator-signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          snapshot: babyResult.snapshot,
+          realizedProjection: babyResult.realizedProjection,
+          realizedTraits: babyResult.realizedTraits,
+          source: babyResult.source,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; destination?: string; upstreamStatus?: number }
+        | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? `Signal send failed (${response.status})`);
+      }
+
+      const destination = payload.destination ?? "destination";
+      const status = payload.upstreamStatus ?? 200;
+      setSignalStatus(`sent to ${destination} (${status})`);
+    } catch (error) {
+      setSignalError(error instanceof Error ? error.message : "Unknown signal-send error");
+    } finally {
+      setSignalBusy(false);
+    }
+  }, [babyResult]);
 
   useEffect(() => {
     setHydrated(true);
@@ -726,16 +813,48 @@ export default function Life3Dashboard() {
   }, [worldModel?.generatedAt]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
+    let alive = true;
+    const tick = async () => {
+      let reading: ArduinoReading | null = null;
+      try {
+        const response = await fetch("/api/arduino-data", { method: "GET", cache: "no-store" });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Arduino read failed (${response.status})`);
+        }
+        const payload = (await response.json()) as { reading?: ArduinoReading };
+        if (!payload.reading) throw new Error("Arduino reading missing");
+        reading = payload.reading;
+        if (alive) {
+          setArduinoOnline(true);
+          setArduinoStatus(null);
+        }
+      } catch (error) {
+        if (alive) {
+          setArduinoOnline(false);
+          setArduinoStatus(error instanceof Error ? error.message : "Arduino offline");
+        }
+      }
+
+      if (!alive) return;
+
       setFrame((prev) => {
         const nextTick = prev.tick + 1;
-        let nextSensors = simulateSensorStep(prev.sensors);
+        let nextSensors = reading
+          ? {
+              temperatureF: Number(reading.temperatureF.toFixed(1)),
+              humidityPct: Number(reading.humidityPct.toFixed(1)),
+              lightLevel: Number(reading.lightLevel.toFixed(0)),
+            }
+          : prev.sensors;
+        let nextTemperatureC = reading ? Number(reading.temperatureC.toFixed(1)) : prev.temperatureC;
         if (debugHeatMode) {
           const hotTemp = Math.max(130.4, 136 + Math.sin(nextTick / 3) * 6 + (Math.random() - 0.5) * 2);
           nextSensors = {
             ...nextSensors,
             temperatureF: Number(hotTemp.toFixed(1)),
           };
+          nextTemperatureC = Number((((nextSensors.temperatureF - 32) * 5) / 9).toFixed(1));
         }
         const label = timeLabel(nextTick);
         const rawHistory = pushRawHistory(prev.rawHistory, { label, sensors: nextSensors });
@@ -749,13 +868,23 @@ export default function Life3Dashboard() {
         return {
           tick: nextTick,
           sensors: nextSensors,
+          temperatureC: nextTemperatureC,
+          lightState: reading?.lightState ?? prev.lightState,
           rawHistory,
           derivedHistory,
         };
       });
+    };
+
+    void tick();
+    const id = window.setInterval(() => {
+      void tick();
     }, 1000);
 
-    return () => window.clearInterval(id);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
   }, [debugHeatMode, worldModel]);
 
   useEffect(() => {
@@ -878,8 +1007,8 @@ export default function Life3Dashboard() {
       frame.rawHistory.slice(-STREAM_WINDOW).map((point) => ({
         t: point.label,
         temperatureF: Number(sensorPercent("temperatureF", point.sensors.temperatureF).toFixed(1)),
-        cameraRgb: cameraRgbPercent(point.sensors),
-        acousticDb: Number(sensorPercent("acousticDb", point.sensors.acousticDb).toFixed(1)),
+        humidityPct: Number(sensorPercent("humidityPct", point.sensors.humidityPct).toFixed(1)),
+        lightLevel: Number(sensorPercent("lightLevel", point.sensors.lightLevel).toFixed(1)),
       })),
     [frame.rawHistory]
   );
@@ -905,8 +1034,8 @@ export default function Life3Dashboard() {
   const rawSeries = useMemo<ChartSeries[]>(
     () => [
       { key: "temperatureF", label: "Temp F", color: "#00e5ff", strokeWidth: 2.3, dasharray: "0" },
-      { key: "cameraRgb", label: "Camera RGB", color: "#ff4dff", strokeWidth: 2.1, dasharray: "10 6" },
-      { key: "acousticDb", label: "Acoustic", color: "#7dff7a", strokeWidth: 2.1, dasharray: "4 5" },
+      { key: "humidityPct", label: "Humidity", color: "#ff4dff", strokeWidth: 2.1, dasharray: "10 6" },
+      { key: "lightLevel", label: "Light", color: "#7dff7a", strokeWidth: 2.1, dasharray: "4 5" },
     ],
     []
   );
@@ -972,6 +1101,9 @@ export default function Life3Dashboard() {
                   >
                     dbg
                   </button>
+                  <span className="rounded-sm border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]" style={{ borderColor: theme.border, color: arduinoOnline ? "#6ee7b7" : "#fb7185" }}>
+                    {arduinoOnline ? "lan up" : "lan down"}
+                  </span>
                   <IconBadge tag="in" />
                 </div>
               }
@@ -980,27 +1112,52 @@ export default function Life3Dashboard() {
                 <SensorCard
                   label={SENSOR_INPUT_SCHEMA.temperatureF.label}
                   icon={<IconBadge tag="tmp" />}
-                  value={formatValue(frame.sensors.temperatureF)}
-                  unit={SENSOR_INPUT_SCHEMA.temperatureF.unit}
-                  range={`${SENSOR_INPUT_SCHEMA.temperatureF.min}-${SENSOR_INPUT_SCHEMA.temperatureF.max}`}
+                  value={formatValue(frame.temperatureC)}
+                  unit="°C"
+                  range={`trigger uses ${SENSOR_INPUT_SCHEMA.temperatureF.min}-${SENSOR_INPUT_SCHEMA.temperatureF.max}${SENSOR_INPUT_SCHEMA.temperatureF.unit}`}
                   themeName={themeName}
                 />
                 <SensorCard
-                  label="Camera RGB"
-                  icon={<IconBadge tag="cam" />}
-                  value={`${frame.sensors.cameraR}/${frame.sensors.cameraG}/${frame.sensors.cameraB}`}
-                  unit=""
-                  range="0-255 / channel"
+                  label={SENSOR_INPUT_SCHEMA.humidityPct.label}
+                  icon={<IconBadge tag="hum" />}
+                  value={formatValue(frame.sensors.humidityPct)}
+                  unit={SENSOR_INPUT_SCHEMA.humidityPct.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.humidityPct.min}-${SENSOR_INPUT_SCHEMA.humidityPct.max}`}
                   themeName={themeName}
                 />
                 <SensorCard
-                  label={SENSOR_INPUT_SCHEMA.acousticDb.label}
-                  icon={<IconBadge tag="db" />}
-                  value={formatValue(frame.sensors.acousticDb)}
-                  unit={SENSOR_INPUT_SCHEMA.acousticDb.unit}
-                  range={`${SENSOR_INPUT_SCHEMA.acousticDb.min}-${SENSOR_INPUT_SCHEMA.acousticDb.max}`}
+                  label={SENSOR_INPUT_SCHEMA.lightLevel.label}
+                  icon={<IconBadge tag="lx" />}
+                  value={formatValue(frame.sensors.lightLevel, 0)}
+                  unit={SENSOR_INPUT_SCHEMA.lightLevel.unit}
+                  range={`${SENSOR_INPUT_SCHEMA.lightLevel.min}-${SENSOR_INPUT_SCHEMA.lightLevel.max}`}
                   themeName={themeName}
                 />
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
+                <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                    <IconBadge tag="st" />
+                    Light State
+                  </div>
+                  <div className="mt-2 text-xl font-semibold">{frame.lightState}</div>
+                  <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                    harvested from arduino payload
+                  </div>
+                </div>
+                <div className="rounded-md border p-3 xl:col-span-2" style={{ borderColor: theme.border, background: theme.subpanel }}>
+                  <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
+                    Link Status
+                  </div>
+                  <div className="mt-2 text-sm" style={{ color: arduinoOnline ? "#6ee7b7" : "#fb7185" }}>
+                    {arduinoOnline ? "Arduino stream online" : "Arduino stream offline (holding last value)"}
+                  </div>
+                  {arduinoStatus ? (
+                    <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
+                      {arduinoStatus}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </Panel>
 
@@ -1072,8 +1229,8 @@ export default function Life3Dashboard() {
 
           <div ref={derivedPanelRef} className="min-h-0">
             <Panel
-              title="Derived World State"
-              subtitle="Computed from AI-returned weighted formulas over live sensor values"
+              title="Mother Model World State"
+              subtitle="Higher order statistics computed from sensory data trajectories."
               themeName={themeName}
               right={<IconBadge tag="ai" />}
             >
@@ -1091,7 +1248,7 @@ export default function Life3Dashboard() {
                   <div className="max-w-xl text-center">
                     <div className="text-sm font-semibold uppercase tracking-[0.25em]">idle</div>
                     <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.muted }}>
-                      Provide a prompt and generate the world model. The board will then load 5-6 derived states (3-4 AI-generated + Surrounding Temperature + Hue) and continuously compute them from the raw sensor stream.
+                      Provide a description and the model will combine it with temperature/humidity/light streams to create additional higher-order stats.
                     </p>
                   </div>
                 </div>
@@ -1225,7 +1382,11 @@ export default function Life3Dashboard() {
         error={babyError}
         result={babyResult}
         memory={babyMemory}
+        signalBusy={signalBusy}
+        signalStatus={signalStatus}
+        signalError={signalError}
         themeName={themeName}
+        onSendSignal={() => void sendRealizableSignal()}
         onClose={() => setBabyModalOpen(false)}
       />
     </div>

@@ -21,7 +21,7 @@ Task:
 - Keep values physically plausible for a small embodied robot.
 - Realization semantics for demo:
   - Redder color => more aggressive baby behavior; greener => less aggressive.
-  - Louder environment => larger micro-servo angle.
+  - Higher humidity => larger micro-servo angle.
   - Hotter environment => larger size and higher pump-power projection.
 - No rationale text, no extra keys.`;
 

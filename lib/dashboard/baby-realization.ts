@@ -81,7 +81,7 @@ function projectedLightColor(aggression: number): BabyDiscreteConfig["lightColor
 
 export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfig): BabyRealizedProjection {
   const thermalDelta = Math.max(0, snapshot.sensors.temperatureF - snapshot.monitorThresholdF);
-  const loudnessFactor = clampValue((snapshot.sensors.acousticDb - 10) / 85, 0, 1);
+  const humidityFactor = clampValue(snapshot.sensors.humidityPct / 100, 0, 1);
   const speedFactor = clampValue((traits.speed - BABY_REALIZATION.speed.min) / (BABY_REALIZATION.speed.max - BABY_REALIZATION.speed.min), 0, 1);
   const aggression = clampValue(modeAggression(traits.mode) * 0.7 + speedFactor * 0.3, 0, 1);
 
@@ -90,7 +90,7 @@ export function projectBabyTraits(snapshot: BabySnapshot, traits: BabyTraitConfi
     DEMO_REALIZABLE_LIMITS.pumpPower.levels[0],
     DEMO_REALIZABLE_LIMITS.pumpPower.levels[DEMO_REALIZABLE_LIMITS.pumpPower.levels.length - 1]
   );
-  const angleRaw = loudnessFactor * 90;
+  const angleRaw = humidityFactor * 90;
 
   return {
     pumpPower: nearestPump(pumpRaw),

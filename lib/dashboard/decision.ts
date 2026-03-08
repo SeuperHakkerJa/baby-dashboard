@@ -1,4 +1,4 @@
-import { clamp, rgbToHueDeg, sensorPercent } from "./pipeline";
+import { clamp, sensorPercent } from "./pipeline";
 import type { DerivedHistoryPoint, DerivedSnapshot } from "./pipeline";
 import type { SensorInput, WorldModelSpec } from "./types";
 
@@ -114,12 +114,8 @@ export function synthesizeGenomeCandidate(
   forecast: ForecastState
 ): GenomeCandidate {
   const thermal = sensorPercent("temperatureF", sensors.temperatureF);
-  const acoustic = sensorPercent("acousticDb", sensors.acousticDb);
-  const cameraR = sensorPercent("cameraR", sensors.cameraR);
-  const cameraG = sensorPercent("cameraG", sensors.cameraG);
-  const cameraB = sensorPercent("cameraB", sensors.cameraB);
-  const chroma = (cameraR + cameraG + cameraB) / 3;
-  const hue = clamp(rgbToHueDeg(sensors.cameraR, sensors.cameraG, sensors.cameraB) / 3.6);
+  const humidity = sensorPercent("humidityPct", sensors.humidityPct);
+  const light = sensorPercent("lightLevel", sensors.lightLevel);
 
   const stateA = weightedWorldState(snapshot, model.definitions[0]?.id ?? "");
   const stateB = weightedWorldState(snapshot, model.definitions[1]?.id ?? "");
@@ -127,9 +123,9 @@ export function synthesizeGenomeCandidate(
 
   const axes = {
     thermalTolerance: clamp(36 + thermal * 0.48 + forecast.birthReadiness * 0.32 - forecast.hazard * 0.12),
-    acousticShielding: clamp(28 + acoustic * 0.72 + forecast.hazard * 0.25),
-    photonicAdaptation: clamp(32 + hue * 0.56 + stateA * 0.28),
-    chromaticSensitivity: clamp(34 + chroma * 0.44 + stateB * 0.34),
+    acousticShielding: clamp(28 + humidity * 0.62 + forecast.hazard * 0.25),
+    photonicAdaptation: clamp(32 + light * 0.56 + stateA * 0.28),
+    chromaticSensitivity: clamp(34 + light * 0.44 + stateB * 0.34),
     fluidRegulation: clamp(42 + thermal * 0.4 + forecast.hazard * 0.24),
     orientationControl: clamp(44 + stateC * 0.42 + forecast.modelCapability * 0.24),
     sensorFusion: clamp(30 + stateA * 0.3 + stateB * 0.3 + stateC * 0.26),

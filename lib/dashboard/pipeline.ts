@@ -1,11 +1,10 @@
 import { SENSOR_INPUT_SCHEMA } from "./schema";
 import type { DerivedDefinition, DerivedObjective, SensorInput, SensorKey, WorldModelSpec } from "./types";
 
-const SENSOR_KEYS: SensorKey[] = ["temperatureF", "cameraR", "cameraG", "cameraB", "acousticDb"];
+const SENSOR_KEYS: SensorKey[] = ["temperatureF", "humidityPct", "lightLevel"];
 const HISTORY_LIMIT = 180;
 
 const FIXED_SURROUNDING_TEMP_ID = "fixed_surrounding_temperature";
-const FIXED_HUE_ID = "fixed_hue";
 
 export type RawHistoryPoint = {
   label: string;
@@ -38,48 +37,11 @@ export function sensorPercent(sensor: SensorKey, value: number) {
   return clamp(raw);
 }
 
-export function rgbToHueDeg(r: number, g: number, b: number) {
-  const rn = clamp(r, 0, 255) / 255;
-  const gn = clamp(g, 0, 255) / 255;
-  const bn = clamp(b, 0, 255) / 255;
-
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const delta = max - min;
-
-  if (delta === 0) return 0;
-
-  let hue = 0;
-  if (max === rn) {
-    hue = ((gn - bn) / delta) % 6;
-  } else if (max === gn) {
-    hue = (bn - rn) / delta + 2;
-  } else {
-    hue = (rn - gn) / delta + 4;
-  }
-
-  const deg = hue * 60;
-  return deg < 0 ? deg + 360 : deg;
-}
-
-export function cameraRgbPercent(sensors: SensorInput) {
-  return Number(
-    (
-      (sensorPercent("cameraR", sensors.cameraR) +
-        sensorPercent("cameraG", sensors.cameraG) +
-        sensorPercent("cameraB", sensors.cameraB)) /
-      3
-    ).toFixed(1)
-  );
-}
-
 export function initialSensors(): SensorInput {
   return {
     temperatureF: 74.2,
-    cameraR: 152,
-    cameraG: 173,
-    cameraB: 204,
-    acousticDb: 34,
+    humidityPct: 35,
+    lightLevel: 567,
   };
 }
 
@@ -88,25 +50,18 @@ export function simulateSensorStep(prev: SensorInput): SensorInput {
 
   const next: SensorInput = {
     temperatureF: clamp(jitter(prev.temperatureF, 1.6), SENSOR_INPUT_SCHEMA.temperatureF.min, SENSOR_INPUT_SCHEMA.temperatureF.max),
-    cameraR: clamp(jitter(prev.cameraR, 18), SENSOR_INPUT_SCHEMA.cameraR.min, SENSOR_INPUT_SCHEMA.cameraR.max),
-    cameraG: clamp(jitter(prev.cameraG, 18), SENSOR_INPUT_SCHEMA.cameraG.min, SENSOR_INPUT_SCHEMA.cameraG.max),
-    cameraB: clamp(jitter(prev.cameraB, 18), SENSOR_INPUT_SCHEMA.cameraB.min, SENSOR_INPUT_SCHEMA.cameraB.max),
-    acousticDb: clamp(jitter(prev.acousticDb, 3.2), SENSOR_INPUT_SCHEMA.acousticDb.min, SENSOR_INPUT_SCHEMA.acousticDb.max),
+    humidityPct: clamp(jitter(prev.humidityPct, 2.2), SENSOR_INPUT_SCHEMA.humidityPct.min, SENSOR_INPUT_SCHEMA.humidityPct.max),
+    lightLevel: clamp(jitter(prev.lightLevel, 80), SENSOR_INPUT_SCHEMA.lightLevel.min, SENSOR_INPUT_SCHEMA.lightLevel.max),
   };
 
-  if (Math.random() > 0.95) next.acousticDb = clamp(next.acousticDb + 7, SENSOR_INPUT_SCHEMA.acousticDb.min, SENSOR_INPUT_SCHEMA.acousticDb.max);
+  if (Math.random() > 0.95) next.humidityPct = clamp(next.humidityPct + 4.2, SENSOR_INPUT_SCHEMA.humidityPct.min, SENSOR_INPUT_SCHEMA.humidityPct.max);
   if (Math.random() > 0.965) next.temperatureF = clamp(next.temperatureF + 3.4, SENSOR_INPUT_SCHEMA.temperatureF.min, SENSOR_INPUT_SCHEMA.temperatureF.max);
-  if (Math.random() > 0.97) {
-    next.cameraR = clamp(next.cameraR + 24, SENSOR_INPUT_SCHEMA.cameraR.min, SENSOR_INPUT_SCHEMA.cameraR.max);
-    next.cameraB = clamp(next.cameraB - 20, SENSOR_INPUT_SCHEMA.cameraB.min, SENSOR_INPUT_SCHEMA.cameraB.max);
-  }
+  if (Math.random() > 0.97) next.lightLevel = clamp(next.lightLevel + 230, SENSOR_INPUT_SCHEMA.lightLevel.min, SENSOR_INPUT_SCHEMA.lightLevel.max);
 
   return {
     temperatureF: Number(next.temperatureF.toFixed(1)),
-    cameraR: Number(next.cameraR.toFixed(0)),
-    cameraG: Number(next.cameraG.toFixed(0)),
-    cameraB: Number(next.cameraB.toFixed(0)),
-    acousticDb: Number(next.acousticDb.toFixed(1)),
+    humidityPct: Number(next.humidityPct.toFixed(1)),
+    lightLevel: Number(next.lightLevel.toFixed(0)),
   };
 }
 
@@ -131,21 +86,12 @@ function fixedDerivedValue(definitionId: string, sensors: SensorInput) {
     return Number(sensors.temperatureF.toFixed(1));
   }
 
-  if (definitionId === FIXED_HUE_ID) {
-    const hueDeg = rgbToHueDeg(sensors.cameraR, sensors.cameraG, sensors.cameraB);
-    return Number((hueDeg / 3.6).toFixed(1));
-  }
-
   return null;
 }
 
 export function formulaText(definition: DerivedDefinition) {
   if (definition.id === FIXED_SURROUNDING_TEMP_ID) {
     return "surroundingTemperature = temperatureF";
-  }
-
-  if (definition.id === FIXED_HUE_ID) {
-    return "hue = rgbToHueDeg(cameraR,cameraG,cameraB) / 3.6";
   }
 
   const parts: string[] = [];
@@ -220,28 +166,11 @@ const FIXED_DERIVED_DEFINITIONS: DerivedDefinition[] = [
     objective: "monitor",
     weights: {
       temperatureF: 0,
-      cameraR: 0,
-      cameraG: 0,
-      cameraB: 0,
-      acousticDb: 0,
+      humidityPct: 0,
+      lightLevel: 0,
     },
     bias: 0,
     threshold: 130,
-  },
-  {
-    id: FIXED_HUE_ID,
-    label: "Hue",
-    description: "HSV hue computed from camera RGB and normalized to 0..100.",
-    objective: "none",
-    weights: {
-      temperatureF: 0,
-      cameraR: 0,
-      cameraG: 0,
-      cameraB: 0,
-      acousticDb: 0,
-    },
-    bias: 0,
-    threshold: 78,
   },
 ];
 
@@ -261,10 +190,8 @@ export function buildLocalWorldModel(prompt: string): WorldModelSpec {
   const generated: DerivedDefinition[] = labels.map((label, index) => {
     const weights: Record<SensorKey, number> = {
       temperatureF: Number((rnd() * 1.2 - 0.2).toFixed(2)),
-      cameraR: Number((rnd() * 1.3 - 0.25).toFixed(2)),
-      cameraG: Number((rnd() * 1.3 - 0.25).toFixed(2)),
-      cameraB: Number((rnd() * 1.3 - 0.25).toFixed(2)),
-      acousticDb: Number((rnd() * -1.1).toFixed(2)),
+      humidityPct: Number((rnd() * 1.1 - 0.2).toFixed(2)),
+      lightLevel: Number((rnd() * 1.2 - 0.3).toFixed(2)),
     };
 
     return {
@@ -311,10 +238,8 @@ export function sanitizeWorldModel(raw: unknown, prompt: string, fallback: World
 
       const weights: Record<SensorKey, number> = {
         temperatureF: Number(weightsRaw?.temperatureF ?? 0),
-        cameraR: Number(weightsRaw?.cameraR ?? 0),
-        cameraG: Number(weightsRaw?.cameraG ?? 0),
-        cameraB: Number(weightsRaw?.cameraB ?? 0),
-        acousticDb: Number(weightsRaw?.acousticDb ?? 0),
+        humidityPct: Number(weightsRaw?.humidityPct ?? 0),
+        lightLevel: Number(weightsRaw?.lightLevel ?? 0),
       };
 
       for (const key of SENSOR_KEYS) {

@@ -1,19 +1,16 @@
 // Edit this file to tune how the generated derived world-state model is built.
-// Note: The app always appends two fixed local derived states after model output:
+// Note: The app always appends one fixed local derived state after model output:
 // - Surrounding Temperature (direct passthrough of temperatureF)
-// - Hue (computed from cameraR/cameraG/cameraB)
 
 export const WORLD_MODEL_PROMPT_TEMPLATE = `You are generating a compact task-conditioned world model for an adaptive robot.
 
 Primitive sensor inputs available for weighted formulas:
 - temperatureF
-- acousticDb
-- cameraR
-- cameraG
-- cameraB
+- humidityPct
+- lightLevel
 
 Generate ONLY 3-4 derived world-state variables for this mission.
-Do not include Surrounding Temperature or Hue; those are appended locally by the app.
+Do not include Surrounding Temperature; that is appended locally by the app.
 
 Return compact JSON only (no markdown):
 {
@@ -26,10 +23,8 @@ Return compact JSON only (no markdown):
       "objective": "maximize" | "minimize" | "none",
       "weights": {
         "temperatureF": number,
-        "acousticDb": number,
-        "cameraR": number,
-        "cameraG": number,
-        "cameraB": number
+        "humidityPct": number,
+        "lightLevel": number
       },
       "bias": number,
       "threshold": number

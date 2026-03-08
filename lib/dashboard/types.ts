@@ -1,9 +1,7 @@
 export type SensorInput = {
   temperatureF: number;
-  cameraR: number;
-  cameraG: number;
-  cameraB: number;
-  acousticDb: number;
+  humidityPct: number;
+  lightLevel: number;
 };
 
 export type ActuatorOutput = {
