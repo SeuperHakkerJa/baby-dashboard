@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 
 import { readStrictOpenAIKeyFromEnvLocal } from "../../../lib/dashboard/env";
+import { parseJsonLoose, stripJsonCodeFence } from "../../../lib/dashboard/json";
 import { localPlanner } from "../../../lib/dashboard/model";
 import { buildPlannerPrompt } from "../../../lib/dashboard/prompts";
 import type { PlannerPayload, PlannerResponse } from "../../../lib/dashboard/types";
@@ -71,17 +72,14 @@ export async function POST(req: Request) {
       timeout: PLANNER_TIMEOUT_MS,
     });
 
-    const text = response.output_text?.trim() ?? "";
-    const cleaned = text.replace(/^```json\s*/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+    const cleaned = stripJsonCodeFence(response.output_text?.trim() ?? "");
 
     if (!cleaned) {
       return Response.json({ ...fallback, source: "local", warning: "Empty model output" });
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(cleaned) as unknown;
-    } catch {
+    const parsed = parseJsonLoose(cleaned);
+    if (!parsed) {
       return Response.json({
         ...fallback,
         source: "local",

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { aggregateScore } from "./lib/dashboard/decision";
+import { sanitizeDiscreteConfig } from "./lib/dashboard/discrete-config";
+import { isThresholdBreached, thresholdLabel } from "./lib/dashboard/objective";
 import {
   type DerivedHistoryPoint,
   type DerivedSnapshot,
@@ -123,11 +125,10 @@ function Panel({
   children: React.ReactNode;
 }) {
   const theme = THEMES[themeName];
-  const frameClass = isClassifiedTheme(themeName) ? "min-h-0 rounded-md border p-4 md:p-5" : "min-h-0 rounded-md border p-4 md:p-5";
 
   return (
     <section
-      className={frameClass}
+      className="min-h-0 rounded-md border p-4 md:p-5"
       style={{
         background: theme.panel,
         borderColor: theme.border,
@@ -190,10 +191,9 @@ function SensorCard({
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
-  const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
 
   return (
-    <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
+    <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em]" style={{ color: theme.muted }}>
         {icon}
         {label}
@@ -231,36 +231,17 @@ function DerivedCard({
   themeName: ThemeName;
 }) {
   const theme = THEMES[themeName];
-  const isThresholdBreached =
-    objective === "maximize"
-      ? value < threshold
-      : objective === "minimize"
-        ? value > threshold
-        : objective === "monitor"
-          ? value <= 0 || value >= threshold
-          : false;
-  const thresholdText =
-    objective === "maximize"
-      ? `min ${threshold.toFixed(1)}`
-      : objective === "minimize"
-        ? `max ${threshold.toFixed(1)}`
-        : objective === "monitor"
-          ? `0 < x < ${threshold.toFixed(1)}`
-          : "threshold off";
-  const objectiveColor =
-    objective === "maximize" ? "#6ee7b7" : objective === "minimize" ? "#fda4af" : objective === "monitor" ? "#facc15" : "#a3a3a3";
-  const objectiveBg =
-    objective === "maximize"
-      ? "rgba(16,185,129,0.16)"
-      : objective === "minimize"
-        ? "rgba(244,63,94,0.14)"
-        : objective === "monitor"
-          ? "rgba(250,204,21,0.14)"
-          : "rgba(163,163,163,0.15)";
-  const shellClass = isClassifiedTheme(themeName) ? "rounded-md border p-3" : "rounded-md border p-3";
-
+  const breached = isThresholdBreached(objective, value, threshold);
+  const thresholdText = objective === "none" ? "threshold off" : thresholdLabel(objective, threshold);
+  const objectiveStyle = {
+    maximize: { color: "#6ee7b7", background: "rgba(16,185,129,0.16)" },
+    minimize: { color: "#fda4af", background: "rgba(244,63,94,0.14)" },
+    monitor: { color: "#facc15", background: "rgba(250,204,21,0.14)" },
+    none: { color: "#a3a3a3", background: "rgba(163,163,163,0.15)" },
+  } as const;
+  const badgeStyle = objectiveStyle[objective];
   return (
-    <div className={shellClass} style={{ borderColor: theme.border, background: theme.subpanel }}>
+    <div className="rounded-md border p-3" style={{ borderColor: theme.border, background: theme.subpanel }}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold">{label}</div>
@@ -271,15 +252,15 @@ function DerivedCard({
         <div
           className="rounded-sm px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
           style={{
-            color: objectiveColor,
-            background: objectiveBg,
+            color: badgeStyle.color,
+            background: badgeStyle.background,
           }}
         >
           {objective}
         </div>
       </div>
       <div className="mt-3 flex items-end justify-between gap-3">
-        <div className="text-2xl font-semibold" style={{ color: isThresholdBreached ? "#fb7185" : theme.text }}>
+        <div className="text-2xl font-semibold" style={{ color: breached ? "#fb7185" : theme.text }}>
           {value.toFixed(1)}
         </div>
         <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: theme.muted }}>
@@ -545,22 +526,8 @@ function BabyGenomeModal({
                   <div style={{ color: theme.muted }}>no world-model snapshot states</div>
                 ) : (
                   result.snapshot.derived.map((item) => {
-                    const breached =
-                      item.objective === "maximize"
-                        ? item.value < item.threshold
-                        : item.objective === "minimize"
-                          ? item.value > item.threshold
-                          : item.objective === "monitor"
-                            ? item.value <= 0 || item.value >= item.threshold
-                            : false;
-                    const objectiveLabel =
-                      item.objective === "maximize"
-                        ? `min ${item.threshold.toFixed(1)}`
-                        : item.objective === "minimize"
-                          ? `max ${item.threshold.toFixed(1)}`
-                          : item.objective === "monitor"
-                            ? `0 < x < ${item.threshold.toFixed(1)}`
-                            : "off";
+                    const breached = isThresholdBreached(item.objective, item.value, item.threshold);
+                    const objectiveLabel = thresholdLabel(item.objective, item.threshold);
                     return (
                       <div key={item.id} className="flex items-center justify-between gap-2 rounded-sm border px-2 py-1" style={{ borderColor: theme.border }}>
                         <div className="truncate">
@@ -872,22 +839,11 @@ export default function Life3Dashboard() {
         .map((item) => {
           if (!item || typeof item !== "object") return null;
           const row = item as Record<string, unknown>;
-          const config = row.config as Record<string, unknown> | undefined;
+          const config = sanitizeDiscreteConfig(row.config);
           if (!config) return null;
-          const pumpRaw = Number(config.pumpPower);
-          const angleRaw = Number(config.microServoAngle);
-          const lightRaw = String(config.lightColor ?? "").toLowerCase();
-          const pumpPower: BabyDiscreteConfig["pumpPower"] =
-            pumpRaw === 50 || pumpRaw === 75 || pumpRaw === 100 ? pumpRaw : 50;
-          const microServoAngle: BabyDiscreteConfig["microServoAngle"] =
-            angleRaw === -90 || angleRaw === -45 || angleRaw === 0 || angleRaw === 45 || angleRaw === 90
-              ? angleRaw
-              : 0;
-          const lightColor: BabyDiscreteConfig["lightColor"] =
-            lightRaw === "red" || lightRaw === "green" || lightRaw === "blue" ? lightRaw : "green";
           return {
             capturedAt: typeof row.capturedAt === "string" ? row.capturedAt : new Date().toISOString(),
-            config: { pumpPower, microServoAngle, lightColor },
+            config,
           };
         })
         .filter((item): item is { capturedAt: string; config: BabyDiscreteConfig } => item !== null)
@@ -1439,14 +1395,7 @@ export default function Life3Dashboard() {
                       {formulaText(definition)}
                     </div>
                     <div className="mt-1 text-[11px]" style={{ color: theme.muted }}>
-                      threshold:{" "}
-                      {definition.objective === "maximize"
-                        ? `min ${definition.threshold.toFixed(1)}`
-                        : definition.objective === "minimize"
-                          ? `max ${definition.threshold.toFixed(1)}`
-                          : definition.objective === "monitor"
-                            ? `0 < x < ${definition.threshold.toFixed(1)}`
-                          : "off"}
+                      threshold: {thresholdLabel(definition.objective, definition.threshold)}
                     </div>
                   </div>
                 ))}

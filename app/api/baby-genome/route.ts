@@ -1,29 +1,17 @@
 import OpenAI from "openai";
 
 import { ensureUniqueProjection, projectBabyTraits, realizeBabyTraits } from "../../../lib/dashboard/baby-realization";
+import { sanitizeDiscreteConfigList } from "../../../lib/dashboard/discrete-config";
 import { readStrictOpenAIKeyFromEnvLocal } from "../../../lib/dashboard/env";
 import { buildBabyGenomePrompt } from "../../../lib/dashboard/baby-genome-prompt";
+import { stripJsonCodeFence, parseJsonLoose } from "../../../lib/dashboard/json";
+import { isThresholdBreached } from "../../../lib/dashboard/objective";
 import type { BabyDiscreteConfig, BabyGenomeRequest, BabyGenomeResponse, BabySnapshot, BabyTraitConfig } from "../../../lib/dashboard/types";
 
 const BABY_MODEL_ID = process.env.OPENAI_BABY_MODEL ?? "gpt-5-nano";
 const BABY_TIMEOUT_MS = Number(process.env.OPENAI_BABY_TIMEOUT_MS ?? 18000);
 const BABY_MAX_TOKENS = Number(process.env.OPENAI_BABY_MAX_TOKENS ?? 500);
 const SURROUNDING_DERIVED_ID = "fixed_surrounding_temperature";
-
-function parseJsonLoose(text: string): unknown | null {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-    try {
-      return JSON.parse(text.slice(firstBrace, lastBrace + 1));
-    } catch {
-      return null;
-    }
-  }
-}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -67,31 +55,7 @@ function isValidSnapshot(input: unknown): input is BabySnapshot {
 }
 
 function sanitizeForbiddenConfigs(input: unknown): BabyDiscreteConfig[] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const raw = item as Record<string, unknown>;
-      const pumpRaw = Number(raw.pumpPower);
-      const angleRaw = Number(raw.microServoAngle);
-      const lightRaw = String(raw.lightColor ?? "").toLowerCase();
-
-      const pumpPower: BabyDiscreteConfig["pumpPower"] =
-        pumpRaw === 50 || pumpRaw === 75 || pumpRaw === 100 ? pumpRaw : 50;
-      const microServoAngle: BabyDiscreteConfig["microServoAngle"] =
-        angleRaw === -90 || angleRaw === -45 || angleRaw === 0 || angleRaw === 45 || angleRaw === 90
-          ? angleRaw
-          : 0;
-      const lightColor: BabyDiscreteConfig["lightColor"] =
-        lightRaw === "red" || lightRaw === "green" || lightRaw === "blue" ? lightRaw : "green";
-
-      return {
-        pumpPower,
-        microServoAngle,
-        lightColor,
-      };
-    })
-    .filter((item): item is BabyDiscreteConfig => item !== null);
+  return sanitizeDiscreteConfigList(input);
 }
 
 function buildLocalTraits(snapshot: BabySnapshot): BabyTraitConfig {
@@ -99,12 +63,7 @@ function buildLocalTraits(snapshot: BabySnapshot): BabyTraitConfig {
   const thermalValue = surrounding?.value ?? snapshot.sensors.temperatureF;
   const monitorThreshold = surrounding?.threshold ?? snapshot.monitorThresholdF;
   const thermalDelta = Math.max(0, thermalValue - monitorThreshold);
-  const derivedBreaches = snapshot.derived.filter((item) => {
-    if (item.objective === "maximize") return item.value < item.threshold;
-    if (item.objective === "minimize") return item.value > item.threshold;
-    if (item.objective === "monitor") return item.value <= 0 || item.value >= item.threshold;
-    return false;
-  }).length;
+  const derivedBreaches = snapshot.derived.filter((item) => isThresholdBreached(item.objective, item.value, item.threshold)).length;
   const ambientStress = snapshot.derived.length > 0 ? derivedBreaches / snapshot.derived.length : 0;
 
   const speed = 1.0 + thermalDelta * 0.05 + snapshot.sensors.humidityPct * 0.004 + ambientStress * 0.45;
@@ -218,7 +177,7 @@ export async function POST(req: Request) {
       }
     );
 
-    const cleaned = (result.output_text ?? "").replace(/^```json\s*/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+    const cleaned = stripJsonCodeFence(result.output_text ?? "");
     const parsed = cleaned ? parseJsonLoose(cleaned) : null;
     const interpretation = sanitizeInterpretation(parsed, localInterpretation);
     const projectionBase = projectBabyTraits(snapshot, localRealized);

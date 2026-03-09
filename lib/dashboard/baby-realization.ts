@@ -6,6 +6,7 @@ import type {
   BabyTraitConfig,
   BabyTraitMode,
 } from "./types";
+import { DISCRETE_LIGHT_COLORS, DISCRETE_PUMP_LEVELS, DISCRETE_SERVO_ANGLES } from "./discrete-config";
 
 // Standalone realizability interface for demo tuning.
 // Edit these bounds/modes directly to reflect what your hardware can realize.
@@ -18,9 +19,9 @@ export const BABY_REALIZATION: BabyRealizationConfig = {
 };
 
 export const DEMO_REALIZABLE_LIMITS = {
-  pumpPower: { levels: [50, 75, 100] as const, unit: "%" },
-  microServoAngle: { levels: [-90, -45, 0, 45, 90] as const, unit: "deg" },
-  lightColor: { levels: ["red", "green", "blue"] as const },
+  pumpPower: { levels: DISCRETE_PUMP_LEVELS, unit: "%" },
+  microServoAngle: { levels: DISCRETE_SERVO_ANGLES, unit: "deg" },
+  lightColor: { levels: DISCRETE_LIGHT_COLORS },
 } as const;
 
 function clampValue(value: number, min: number, max: number) {

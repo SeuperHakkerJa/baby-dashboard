@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 
 import { readStrictOpenAIKeyFromEnvLocal } from "../../../lib/dashboard/env";
+import { parseJsonLoose, stripJsonCodeFence } from "../../../lib/dashboard/json";
 import { buildLocalWorldModel, sanitizeWorldModel } from "../../../lib/dashboard/pipeline";
 import type { WorldModelResponse } from "../../../lib/dashboard/types";
 import { buildWorldModelPrompt } from "../../../lib/dashboard/world-model-prompt";
@@ -8,26 +9,6 @@ import { buildWorldModelPrompt } from "../../../lib/dashboard/world-model-prompt
 const WORLD_MODEL_ID = process.env.OPENAI_WORLD_MODEL ?? "gpt-5-nano";
 const WORLD_MODEL_TIMEOUT_MS = Number(process.env.OPENAI_WORLD_TIMEOUT_MS ?? 18000);
 const WORLD_MODEL_MAX_TOKENS = Number(process.env.OPENAI_WORLD_MAX_TOKENS ?? 800);
-
-function parseJsonLoose(text: string): unknown | null {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      const slice = text.slice(firstBrace, lastBrace + 1);
-      try {
-        return JSON.parse(slice);
-      } catch {
-        return null;
-      }
-    }
-
-    return null;
-  }
-}
 
 export async function POST(req: Request) {
   let prompt = "";
@@ -77,8 +58,7 @@ export async function POST(req: Request) {
       }
     );
 
-    const outputText = result.output_text?.trim() ?? "";
-    const cleaned = outputText.replace(/^```json\s*/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+    const cleaned = stripJsonCodeFence(result.output_text?.trim() ?? "");
 
     if (!cleaned) {
       const response: WorldModelResponse = {
@@ -135,9 +115,6 @@ export async function POST(req: Request) {
         incompleteReason: result.incomplete_details?.reason ?? null,
       },
     };
-    console.log(
-      `[world-model] source=openai model=${WORLD_MODEL_ID} response_id=${result.id} latency_ms=${response.debug?.latencyMs ?? -1}`
-    );
     return Response.json(response);
   } catch (error) {
     if (error instanceof Error && /timeout|aborted/i.test(error.message)) {

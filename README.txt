@@ -39,7 +39,7 @@
 3. ensure `.env.local` has `OPENAI_API_KEY=...`
    - optional Arduino input source:
      - `ARDUINO_DATA_URL=http://192.168.41.224/data`
-   - optional sender callback destination (defaults to same host as `ARDUINO_DATA_URL` with `/command` path):
+   - optional sender callback destination (defaults to same host as `ARDUINO_DATA_URL` with `/TRIGGER_BABY` path):
      - `ARDUINO_SENDER_SIGNAL_URL=http://192.168.41.224/TRIGGER_BABY`
    - optional sender trigger path when `ARDUINO_SENDER_SIGNAL_URL` is not set:
      - `ARDUINO_SENDER_TRIGGER_PATH=/TRIGGER_BABY`
