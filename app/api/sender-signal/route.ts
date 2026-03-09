@@ -1,5 +1,6 @@
 const ARDUINO_DATA_URL = process.env.ARDUINO_DATA_URL ?? "";
 const ARDUINO_SENDER_SIGNAL_URL = process.env.ARDUINO_SENDER_SIGNAL_URL ?? "";
+const ARDUINO_SENDER_TRIGGER_PATH = process.env.ARDUINO_SENDER_TRIGGER_PATH ?? "/TRIGGER_BABY";
 const ARDUINO_SENDER_SIGNAL_TIMEOUT_MS = Number(process.env.ARDUINO_SENDER_SIGNAL_TIMEOUT_MS ?? 2000);
 
 type SenderSignalRequest = {
@@ -20,7 +21,10 @@ function resolveSenderSignalUrl() {
 
   try {
     const url = new URL(ARDUINO_DATA_URL);
-    url.pathname = "/command";
+    const normalizedPath = ARDUINO_SENDER_TRIGGER_PATH.startsWith("/")
+      ? ARDUINO_SENDER_TRIGGER_PATH
+      : `/${ARDUINO_SENDER_TRIGGER_PATH}`;
+    url.pathname = normalizedPath;
     url.search = "";
     url.hash = "";
     return url.toString();
@@ -42,25 +46,15 @@ export async function POST(req: Request) {
     const body = (await req.json()) as SenderSignalRequest;
     const mode = body.triggerMode === "retry" ? "retry" : "auto";
 
-    const signal = {
-      schema: "life3.sender.prep.v1",
-      sentAt: new Date().toISOString(),
-      action: "prep_pump",
-      triggerMode: mode,
-      trigger: {
-        capturedAt: body.snapshot?.capturedAt ?? null,
-        tick: body.snapshot?.tick ?? null,
-        hotSeconds: body.snapshot?.hotSeconds ?? null,
-        monitorThresholdF: body.snapshot?.monitorThresholdF ?? null,
-      },
-      sensors: body.snapshot?.sensors ?? {},
-      worldModelSnapshot: body.snapshot?.derived ?? [],
-    };
+    // Sender Arduino trigger contract: hitting this URL itself is the trigger.
+    const triggerUrl = new URL(senderSignalUrl);
+    triggerUrl.searchParams.set("mode", mode);
+    if (body.snapshot?.tick != null) triggerUrl.searchParams.set("tick", String(body.snapshot.tick));
+    if (body.snapshot?.hotSeconds != null) triggerUrl.searchParams.set("hotSeconds", String(body.snapshot.hotSeconds));
 
-    const upstream = await fetch(senderSignalUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(signal),
+    const upstream = await fetch(triggerUrl.toString(), {
+      method: "GET",
+      cache: "no-store",
       signal: AbortSignal.timeout(ARDUINO_SENDER_SIGNAL_TIMEOUT_MS),
     });
 
@@ -71,7 +65,7 @@ export async function POST(req: Request) {
       return Response.json(
         {
           error: `Sender rejected signal (${upstream.status})`,
-          destination: senderSignalUrl,
+          destination: triggerUrl.toString(),
           upstreamStatus: upstream.status,
           upstreamBodyPreview: preview,
         },
@@ -81,7 +75,7 @@ export async function POST(req: Request) {
 
     return Response.json({
       ok: true,
-      destination: senderSignalUrl,
+      destination: triggerUrl.toString(),
       upstreamStatus: upstream.status,
       upstreamBodyPreview: preview || "empty body",
     });
